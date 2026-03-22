@@ -44,6 +44,7 @@ export default function Financeiro() {
   const [novaCatUpload, setNovaCatUpload] = useState("");
   const [selecionados, setSelecionados] = useState([]);
   const [saldoAnterior, setSaldoAnterior] = useState(0);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 640);
   const [numAlunos, setNumAlunos] = useState(80);
   const [horasDia, setHorasDia] = useState(8);
   const [margemCalc, setMargemCalc] = useState(10);
@@ -75,6 +76,11 @@ export default function Financeiro() {
   }, []);
 
   useEffect(() => { carregarLancamentos(); }, [carregarLancamentos]);
+  useEffect(() => {
+    const handle = () => setIsMobile(window.innerWidth <= 640);
+    window.addEventListener("resize", handle);
+    return () => window.removeEventListener("resize", handle);
+  }, []);
   useEffect(() => { carregarCategorias(); carregarRegras(); }, [carregarCategorias, carregarRegras]);
 
   // ── Cálculos ──────────────────────────────────
@@ -307,7 +313,7 @@ export default function Financeiro() {
           </div>
 
           {/* Desktop: tabela */}
-          <div className="hide-mobile">
+          {!isMobile && <div>
             <Table headers={["", "Data","Descricao","Categoria","Tipo","Valor","Por",""]}>
               <tr style={{ background: "#f7f7f5" }}>
                 <td style={{ padding: "8px 14px" }}>
@@ -355,7 +361,7 @@ export default function Financeiro() {
           </div>
 
           {/* Mobile: cards com checkbox */}
-          <div className="show-mobile">
+          {isMobile && <div>
             {lancFiltrados.length > 0 && (
               <div style={{ padding: "10px 14px", borderBottom: "0.5px solid #f0f0f0", display: "flex", alignItems: "center", gap: 10, background: "#f7f7f5" }}>
                 <input type="checkbox"
