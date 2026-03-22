@@ -358,7 +358,7 @@ export default function Financeiro() {
               ))}
               {lancFiltrados.length === 0 && <EmptyRow colSpan={8} message="Nenhum lancamento encontrado." />}
             </Table>
-          </div>
+          </div>}
 
           {/* Mobile: cards com checkbox */}
           {isMobile && <div>
@@ -395,7 +395,7 @@ export default function Financeiro() {
                 </div>
               </div>
             ))}
-          </div>
+          </div>}
         </>
       )}
 
