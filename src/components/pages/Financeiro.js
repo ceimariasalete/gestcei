@@ -15,12 +15,7 @@ const CONFIANCA_COLOR = { alta: "#E1F5EE", media: "#FAEEDA", baixa: "#FCEBEB" };
 const CONFIANCA_TEXT  = { alta: "#085041", media: "#633806", baixa: "#791F1F" };
 
 const CATS_DEMISSAO = [
-  "Encargos de Demissao",
-  "FGTS Multa 40%",
-  "Aviso Previo",
-  "13 Proporcional",
-  "Ferias Proporcionais",
-  "Indenizacao",
+  "Demissao",
 ];
 
 export default function Financeiro() {
@@ -80,7 +75,7 @@ export default function Financeiro() {
 
   // Encargos de demissão separados
   const totalDemissoes = lancamentos.filter((l) =>
-    l.tipo === "saida" && (CATS_DEMISSAO.includes(l.categoria) || l.categoria === "Encargos de Demissao")
+    l.tipo === "saida" && CATS_DEMISSAO.includes(l.categoria)
   ).reduce((s, l) => s + Number(l.valor), 0);
 
   const porCategoriaSaida = categorias
@@ -215,18 +210,24 @@ export default function Financeiro() {
       {/* ── LANCAMENTOS ── */}
       {aba === "lancamentos" && (
         <>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
             <select value={tipoFiltro} onChange={(e) => setTipoFiltro(e.target.value)}
-              style={{ padding: "7px 12px", borderRadius: 7, border: "0.5px solid #ccc", fontSize: 13, fontFamily: "inherit", background: "#fff" }}>
+              style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #e0e0e0", fontSize: 13, fontFamily: "inherit", background: "#fff", color: tipoFiltro ? "#085041" : "#555", fontWeight: tipoFiltro ? 500 : 400, cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", minWidth: 140 }}>
               <option value="">Todos os tipos</option>
-              <option value="entrada">Somente entradas</option>
-              <option value="saida">Somente saidas</option>
+              <option value="entrada">Entradas</option>
+              <option value="saida">Saidas</option>
             </select>
             <select value={catFiltro} onChange={(e) => setCatFiltro(e.target.value)}
-              style={{ padding: "7px 12px", borderRadius: 7, border: "0.5px solid #ccc", fontSize: 13, fontFamily: "inherit", background: "#fff" }}>
+              style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #e0e0e0", fontSize: 13, fontFamily: "inherit", background: "#fff", color: catFiltro ? "#085041" : "#555", fontWeight: catFiltro ? 500 : 400, cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", minWidth: 180 }}>
               <option value="">Todas as categorias</option>
               {categorias.map((c) => <option key={c}>{c}</option>)}
             </select>
+            {(tipoFiltro || catFiltro) && (
+              <button onClick={() => { setTipoFiltro(""); setCatFiltro(""); }}
+                style={{ padding: "7px 12px", borderRadius: 8, border: "1px solid #e0e0e0", background: "#fff", fontSize: 12, color: "#888", cursor: "pointer", fontFamily: "inherit" }}>
+                ✕ Limpar filtros
+              </button>
+            )}
           </div>
           <Table headers={["Data","Descricao","Categoria","Tipo","Valor","Por",""]}>
             {lancFiltrados.map((l) => (
