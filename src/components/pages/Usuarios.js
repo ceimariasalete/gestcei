@@ -2,8 +2,9 @@ import { useState, useEffect } from "react";
 import { supabase } from "../../lib/supabase";
 import { useApp } from "../../context/AppContext";
 import { useAuditoria } from "../../hooks/useAuditoria";
-import { TODAS_ABAS, PERMS_PADRAO } from "../../lib/helpers";
-import { Btn, Input, SelectField, Modal, ConfirmModal, Msg, PageHeader, Table, EmptyRow, Badge } from "../ui";
+import { TODAS_ABAS, PERMS_PADRAO, exportarCSV } from "../../lib/helpers";
+import BotaoExportar from "../ui/BotaoExportar";
+import { Btn, Input, SelectField, Modal, ConfirmModal, Msg, PageHeader, Table, EmptyRow } from "../ui";
 
 const PERFIL_COLOR = {
   admin:         { bg: "#F4C0D1", color: "#72243E" },
@@ -11,6 +12,7 @@ const PERFIL_COLOR = {
   cozinheira:    { bg: "#E1F5EE", color: "#085041" },
   limpeza:       { bg: "#FAEEDA", color: "#633806" },
   pedagogico:    { bg: "#EEEDFE", color: "#3C3489" },
+  escritorio:    { bg: "#E6F1FB", color: "#0C447C" },
 };
 
 export default function Usuarios() {
@@ -50,8 +52,7 @@ export default function Usuarios() {
   async function salvarPerms() {
     await supabase.from("usuarios").update({ permissoes: permsEdit }).eq("id", modalPerms.id);
     await log("usuarios", "UPDATE", modalPerms.id, `Alterou permissoes de "${modalPerms.nome}"`, modalPerms.permissoes, permsEdit);
-    setModalPerms(null);
-    carregar();
+    setModalPerms(null); carregar();
     showMsg("Permissoes atualizadas!");
   }
 
@@ -75,11 +76,8 @@ export default function Usuarios() {
         await log("usuarios", "INSERT", authData.user?.id, `Criou usuario "${form.nome}" (${form.perfil})`, null, form);
         showMsg("Usuario criado!");
       }
-      setModal(false);
-      carregar();
-    } catch (e) {
-      showMsg("Erro: " + e.message);
-    }
+      setModal(false); carregar();
+    } catch (e) { showMsg("Erro: " + e.message); }
     setLoading(false);
   }
 
@@ -90,11 +88,18 @@ export default function Usuarios() {
     carregar();
   }
 
+  const dadosExportar = usuarios.map((u) => ({
+    Nome: u.nome, Email: u.email, Perfil: u.perfil,
+    Status: u.ativo ? "Ativo" : "Inativo",
+    "Criado em": u.criado_em ? new Date(u.criado_em).toLocaleDateString("pt-BR") : "",
+  }));
+
   return (
     <div style={{ padding: "1.5rem", maxWidth: 1000, margin: "0 auto" }}>
       {confirmData && <ConfirmModal {...confirmData} onCancel={() => setConfirmData(null)} />}
 
       <PageHeader title="Usuarios" subtitle="Gerenciar acessos e permissoes">
+        <BotaoExportar dados={dadosExportar} nomeArquivo="usuarios" />
         <Btn variant="primary" onClick={() => abrir()}>+ Novo usuario</Btn>
       </PageHeader>
 
@@ -109,8 +114,7 @@ export default function Usuarios() {
             <tr key={u.id} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
               <td style={{ padding: "10px 14px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ width: 28, height: 28, borderRadius: "50%", background: pc.bg, color: pc.color,
-                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 500 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: "50%", background: pc.bg, color: pc.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 500 }}>
                     {u.nome.slice(0, 2).toUpperCase()}
                   </div>
                   <span style={{ fontSize: 13, fontWeight: 500 }}>{u.nome}</span>
@@ -121,11 +125,12 @@ export default function Usuarios() {
                 <span style={{ background: pc.bg, color: pc.color, padding: "2px 10px", borderRadius: 20, fontSize: 11 }}>{u.perfil}</span>
               </td>
               <td style={{ padding: "10px 14px" }}>
-                <span style={{ background: u.ativo ? "#E1F5EE" : "#f0f0ee", color: u.ativo ? "#085041" : "#888",
-                  padding: "2px 10px", borderRadius: 20, fontSize: 11 }}>{u.ativo ? "Ativo" : "Inativo"}</span>
+                <span style={{ background: u.ativo ? "#E1F5EE" : "#f0f0ee", color: u.ativo ? "#085041" : "#888", padding: "2px 10px", borderRadius: 20, fontSize: 11 }}>
+                  {u.ativo ? "Ativo" : "Inativo"}
+                </span>
               </td>
               <td style={{ padding: "10px 14px", fontSize: 12, color: "#888" }}>
-                {abasAtivas.join(" · ") || "Nenhuma"}
+                {abasAtivas.join(" Â· ") || "Nenhuma"}
               </td>
               <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
                 <Btn small onClick={() => abrir(u)} style={{ marginRight: 4 }}>Editar</Btn>
@@ -146,7 +151,7 @@ export default function Usuarios() {
         {usuarios.length === 0 && <EmptyRow colSpan={6} />}
       </Table>
 
-      {/* Modal: Editar/Criar usuario */}
+      {/* Modal: Criar/Editar */}
       {modal && (
         <Modal title={editUsr ? "Editar usuario" : "Novo usuario"} onClose={() => setModal(false)}>
           <Input label="Nome completo" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} />
@@ -158,6 +163,7 @@ export default function Usuarios() {
             <option value="cozinheira">Cozinheira</option>
             <option value="limpeza">Limpeza</option>
             <option value="pedagogico">Pedagogico</option>
+            <option value="escritorio">Escritorio</option>
           </SelectField>
           {editUsr && (
             <div style={{ marginBottom: 12 }}>
@@ -176,10 +182,8 @@ export default function Usuarios() {
 
       {/* Modal: Permissoes */}
       {modalPerms && (
-        <Modal title={`Permissoes — ${modalPerms.nome}`} onClose={() => setModalPerms(null)} width={420}>
-          <div style={{ fontSize: 13, color: "#888", marginBottom: 16 }}>
-            Selecione quais abas este usuario pode acessar:
-          </div>
+        <Modal title={`Permissoes â€” ${modalPerms.nome}`} onClose={() => setModalPerms(null)} width={420}>
+          <div style={{ fontSize: 13, color: "#888", marginBottom: 16 }}>Selecione quais abas este usuario pode acessar:</div>
           {TODAS_ABAS.map((aba) => (
             <label key={aba.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "0.5px solid #f0f0f0", cursor: "pointer" }}>
               <input type="checkbox" checked={!!permsEdit[aba.key]}
@@ -188,7 +192,7 @@ export default function Usuarios() {
               <div>
                 <div style={{ fontSize: 13, fontWeight: 500 }}>{aba.label}</div>
                 <div style={{ fontSize: 11, color: "#aaa" }}>
-                  {{ cozinha:"Ver e gerenciar estoque de cozinha", limpeza:"Ver e gerenciar estoque de limpeza", lista:"Ver e editar lista de compras", financeiro:"Lancamentos, DRE, dashboard e IA", auditoria:"Ver historico de alteracoes", usuarios:"Gerenciar usuarios e permissoes" }[aba.key]}
+                  {{ cozinha:"Estoque de cozinha", limpeza:"Estoque de limpeza", pedagogico:"Material pedagogico", escritorio:"Material de escritorio", lista:"Lista de compras", financeiro:"Financeiro e DRE", auditoria:"Historico de alteracoes", usuarios:"Gerenciar usuarios" }[aba.key]}
                 </div>
               </div>
             </label>
