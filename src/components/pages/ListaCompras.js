@@ -50,7 +50,7 @@ export default function ListaCompras() {
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-        {[["geral","Geral"],["cozinha","Cozinha"],["limpeza","Limpeza"]].map(([k,l]) => (
+        {[["geral","Geral"],["cozinha","Cozinha"],["limpeza","Limpeza"],["escritorio","Mat. Escritorio"]].map(([k,l]) => (
           <button key={k} onClick={() => setFiltro(k)}
             style={{ padding: "6px 18px", borderRadius: 20, border: "0.5px solid", fontSize: 13, cursor: "pointer", fontFamily: "inherit",
               background: filtro === k ? "#1D9E75" : "#fff", borderColor: filtro === k ? "#1D9E75" : "#ccc", color: filtro === k ? "#fff" : "#555" }}>
@@ -125,6 +125,7 @@ export default function ListaCompras() {
           <SelectField label="Setor" value={formExtra.tipo} onChange={(e) => setFormExtra({ ...formExtra, tipo: e.target.value })}>
             <option value="cozinha">Cozinha</option>
             <option value="limpeza">Limpeza</option>
+            <option value="escritorio">Mat. Escritorio</option>
           </SelectField>
           <Input label="Observacao" value={formExtra.observacao} onChange={(e) => setFormExtra({ ...formExtra, observacao: e.target.value })} />
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
