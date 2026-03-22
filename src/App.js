@@ -3,6 +3,7 @@ import Navbar from "./components/Navbar";
 import LoginPage from "./components/LoginPage";
 import Estoque from "./components/pages/Estoque";
 import Pedagogico from "./components/pages/Pedagogico";
+import Escritorio from "./components/pages/Escritorio";
 import ListaCompras from "./components/pages/ListaCompras";
 import Financeiro from "./components/pages/Financeiro";
 import Auditoria from "./components/pages/Auditoria";
@@ -27,6 +28,7 @@ function Router() {
       {tab === "cozinha"    && <Estoque tipo="cozinha" />}
       {tab === "limpeza"    && <Estoque tipo="limpeza" />}
       {tab === "pedagogico" && <Pedagogico />}
+      {tab === "escritorio" && <Escritorio />}
       {tab === "lista"      && <ListaCompras />}
       {tab === "financeiro" && <Financeiro />}
       {tab === "auditoria"  && <Auditoria />}
