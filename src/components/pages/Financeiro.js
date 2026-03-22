@@ -177,16 +177,15 @@ export default function Financeiro() {
   }
 
   async function excluirSelecionados() {
+    const total = selecionados.length;
     setLoading(true);
-    for (const id of selecionados) {
-      const l = lancamentos.find(x => x.id === id);
-      await supabase.from("financeiro").delete().eq("id", id);
-      if (l) await log("financeiro", "DELETE", id, `Excluiu lancamento "${l.descricao}"`, l, null);
-    }
+    // Deletar todos de uma vez com .in()
+    await supabase.from("financeiro").delete().in("id", selecionados);
+    await log("financeiro", "DELETE", null, `Excluiu ${total} lancamentos em lote`, null, null);
     setSelecionados([]);
     setLoading(false);
     carregarLancamentos();
-    showMsg(`${selecionados.length} lancamentos excluidos!`);
+    showMsg(`${total} lancamentos excluidos!`);
   }
 
   function toggleSelecionado(id) {
