@@ -45,7 +45,7 @@ Para cada lancamento encontrado, retorne um JSON com este formato EXATO:
 Regras:
 - tipo deve ser "entrada" ou "saida"
 - valor deve ser numero positivo sem simbolo de moeda
-- data no formato YYYY-MM-DD (se nao encontrar, use hoje)
+- data no formato YYYY-MM-DD. ATENCAO: extratos bancarios do Sicoob mostram datas apenas como DD/MM (ex: 23/02). Use o ano do periodo informado no cabecalho do extrato. Leia com muito cuidado o dia exato de cada lancamento — nao repita a data do lancamento anterior se a data mudar. Se nao encontrar data alguma, use hoje
 - confianca: "alta" se categoria obvia, "media" se provavel, "baixa" se incerto
 - fornecedor_chave: nome padronizado do fornecedor para aprendizado futuro
 - subcategoria_sugerida: so preencha se conseguir inferir (ex: "Repasse convenio", "Vaga particular")
