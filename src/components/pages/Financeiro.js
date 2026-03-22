@@ -43,6 +43,7 @@ export default function Financeiro() {
   const [novaCat, setNovaCat] = useState("");
   const [novaCatUpload, setNovaCatUpload] = useState("");
   const [selecionados, setSelecionados] = useState([]);
+  const [saldoAnterior, setSaldoAnterior] = useState(0);
   const [numAlunos, setNumAlunos] = useState(80);
   const [horasDia, setHorasDia] = useState(8);
   const [margemCalc, setMargemCalc] = useState(10);
@@ -54,6 +55,13 @@ export default function Financeiro() {
       .gte("data", periodo.inicio).lte("data", periodo.fim)
       .order("data", { ascending: false });
     setLancamentos(data || []);
+    // Saldo acumulado: tudo antes do inicio do periodo
+    const { data: anterior } = await supabase.from("financeiro").select("tipo,valor")
+      .lt("data", periodo.inicio);
+    if (anterior) {
+      const s = anterior.reduce((acc, l) => acc + (l.tipo === "entrada" ? Number(l.valor) : -Number(l.valor)), 0);
+      setSaldoAnterior(s);
+    }
   }, [periodo.inicio, periodo.fim]);
 
   const carregarCategorias = useCallback(async () => {
@@ -76,6 +84,7 @@ export default function Financeiro() {
   const totalEntradas = lancamentos.filter((l) => l.tipo === "entrada").reduce((s, l) => s + Number(l.valor), 0);
   const totalSaidas   = lancamentos.filter((l) => l.tipo === "saida").reduce((s, l) => s + Number(l.valor), 0);
   const saldo = totalEntradas - totalSaidas;
+  const saldoAcumulado = saldoAnterior + saldo;
   const margem = totalEntradas > 0 ? Math.round((saldo / totalEntradas) * 100) : 0;
 
   // Encargos de demissão separados
@@ -256,6 +265,7 @@ export default function Financeiro() {
         <MetricCard label="Receita total" value={fmtMoeda(totalEntradas)} subColor="#1D9E75" sub="entradas" accent="#E1F5EE" />
         <MetricCard label="Despesa total" value={fmtMoeda(totalSaidas)} subColor="#A32D2D" sub="saidas" accent="#FCEBEB" />
         <MetricCard label="Resultado" value={fmtMoeda(saldo)} subColor={saldo >= 0 ? "#1D9E75" : "#A32D2D"} sub={saldo >= 0 ? "superavit" : "deficit"} />
+        <MetricCard label="Saldo acumulado" value={fmtMoeda(saldoAcumulado)} subColor={saldoAcumulado >= 0 ? "#1D9E75" : "#A32D2D"} sub="saldo geral" accent={saldoAcumulado >= 0 ? "#E1F5EE" : "#FCEBEB"} />
         <MetricCard label="Margem" value={`${margem}%`} subColor={margem >= 0 ? "#1D9E75" : "#A32D2D"} sub="de resultado" />
         <MetricCard label="Demissoes" value={fmtMoeda(totalDemissoes)} subColor="#A32D2D" sub="encargos trabalhistas" accent="#FFF5F5" />
       </div>
