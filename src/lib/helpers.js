@@ -126,8 +126,12 @@ export const CATS_DEFAULT = [
   "Agua/Energia",
   "Telefone/Internet",
   "Contabilidade",
+  "Nutricionista",
+  "Transporte",
+  "Seguro",
+  "Mensalidade",
   "Repasse/Convenio",
-  "Venda de Servico",
+  "Matricula",
   "Outros",
 ];
 
