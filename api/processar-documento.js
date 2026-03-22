@@ -91,7 +91,8 @@ Retorne APENAS as linhas no formato DD/MM/AAAA|DESCRICAO|VALOR|D_ou_C, nada mais
     }
 
     if (lancamentos.length === 0) {
-      return res.status(500).json({ error: "Nenhum lancamento encontrado no documento" });
+      // Retornar o texto bruto para debug
+      return res.status(500).json({ error: "Nenhum lancamento encontrado", debug: linhasTexto.slice(0, 500) });
     }
 
     // ETAPA 2: Categorizar
