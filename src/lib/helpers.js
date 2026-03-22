@@ -119,7 +119,7 @@ export const CATS_DEFAULT = [
   "Limpeza",
   "Salarios",
   "Encargos Trabalhistas",
-  "Encargos de Demissao",
+  "Demissao",
   "Material Pedagogico",
   "Material de Escritorio",
   "Manutencao",
