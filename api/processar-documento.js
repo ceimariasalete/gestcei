@@ -72,7 +72,7 @@ Regras:
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-5",
         max_tokens: 8000,
         messages: [{ role: "user", content }],
       }),
