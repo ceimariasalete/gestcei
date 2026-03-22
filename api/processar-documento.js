@@ -1,5 +1,4 @@
 // Vercel Serverless Function — proxy seguro para Claude API
-// A chave ANTHROPIC_API_KEY fica apenas no servidor (variável de ambiente da Vercel)
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Método não permitido" });
@@ -16,24 +15,69 @@ export default async function handler(req, res) {
     .join("\n");
 
   const catsTxt = (categorias || []).join(", ");
+  const isPDF = mimeType === "application/pdf";
 
-  const prompt = `Voce e um assistente financeiro de um CEI (Centro de Educacao Infantil) conveniado em Joinville-SC que usa o banco Sicoob/Sicredi.
+  const fileContent = isPDF
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: fileBase64 } }
+    : { type: "image", source: { type: "base64", media_type: mimeType, data: fileBase64 } };
 
-Analise este documento financeiro (pode ser extrato bancario, nota fiscal, comprovante de Pix ou cupom fiscal) e extraia TODOS os lancamentos financeiros encontrados.
+  // PASSO 1: Extrair texto bruto com datas exatas
+  const promptExtracao = `Voce e um leitor de extratos bancarios. Leia este documento e liste CADA lancamento financeiro no formato exato abaixo, um por linha:
+
+DD/MM/AAAA | DESCRICAO | VALOR | D ou C
+
+Regras de leitura:
+- No extrato Sicoob, cada lancamento comeca com a data DD/MM na coluna esquerda
+- A linha "SALDO DO DIA" NAO e um lancamento, ignore completamente
+- A linha "SALDO ANTERIOR" NAO e um lancamento, ignore completamente  
+- O ano fica no cabecalho do extrato no campo PERIODO
+- D = debito = saida, C = credito = entrada
+- Valor sem simbolo de moeda, use ponto como decimal (ex: 1234.56)
+- Liste TODOS os lancamentos sem pular nenhum
+- Retorne APENAS as linhas no formato pedido, sem cabecalho, sem explicacao`;
+
+  try {
+    // Chamada 1: extrair lancamentos brutos
+    const resp1 = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-opus-4-5",
+        max_tokens: 4000,
+        messages: [{ role: "user", content: [fileContent, { type: "text", text: promptExtracao }] }],
+      }),
+    });
+
+    const data1 = await resp1.json();
+    if (data1.error) return res.status(500).json({ error: data1.error.message });
+
+    const textoExtraido = data1.content?.map((c) => c.text || "").join("") || "";
+
+    // PASSO 2: Categorizar com base no texto já extraído
+    const promptCategorizacao = `Voce e um assistente financeiro de um CEI (Centro de Educacao Infantil) em Joinville-SC.
+
+Abaixo estao os lancamentos financeiros ja extraidos de um extrato bancario, no formato:
+DD/MM/AAAA | DESCRICAO | VALOR | D ou C
+
+${textoExtraido}
 
 Categorias disponiveis: ${catsTxt}
 
 Regras de categorizacao ja aprendidas (USE SEMPRE que o fornecedor/descricao bater):
 ${regrasTxt || "Nenhuma regra ainda"}
 
-Para cada lancamento encontrado, retorne um JSON com este formato EXATO:
+Para cada linha acima, retorne um JSON com este formato EXATO:
 {
   "lancamentos": [
     {
       "descricao": "descricao limpa do lancamento",
       "valor": 123.45,
       "tipo": "saida",
-      "data": "2026-03-15",
+      "data": "2026-02-23",
       "categoria_sugerida": "Alimentacao",
       "subcategoria_sugerida": "",
       "confianca": "alta",
@@ -43,28 +87,15 @@ Para cada lancamento encontrado, retorne um JSON com este formato EXATO:
 }
 
 Regras:
-- tipo deve ser "entrada" ou "saida"
-- valor deve ser numero positivo sem simbolo de moeda
-- data no formato YYYY-MM-DD. ATENCAO CRITICA: extratos bancarios do Sicoob mostram datas como DD/MM (ex: 23/02). Cada lancamento tem sua propria data no inicio da linha. A linha "SALDO DO DIA DD/MM" e um resumo do saldo e NAO e um lancamento — ignore ela para fins de data. Use SEMPRE a data da propria linha do lancamento, nunca a data do saldo anterior ou posterior. Use o ano do periodo informado no cabecalho do extrato. Se nao encontrar data, use hoje
+- tipo: "saida" se D (debito), "entrada" se C (credito)
+- valor: numero positivo sem simbolo
+- data: converta DD/MM/AAAA para YYYY-MM-DD exatamente como esta na linha
 - confianca: "alta" se categoria obvia, "media" se provavel, "baixa" se incerto
-- fornecedor_chave: nome padronizado do fornecedor para aprendizado futuro
-- subcategoria_sugerida: so preencha se conseguir inferir (ex: "Repasse convenio", "Vaga particular")
+- fornecedor_chave: nome padronizado do fornecedor
+- subcategoria_sugerida: so preencha se conseguir inferir
 - Retorne APENAS o JSON valido, sem texto adicional, sem markdown`;
 
-  const isPDF = mimeType === "application/pdf";
-
-  const content = isPDF
-    ? [
-        { type: "document", source: { type: "base64", media_type: "application/pdf", data: fileBase64 } },
-        { type: "text", text: prompt },
-      ]
-    : [
-        { type: "image", source: { type: "base64", media_type: mimeType, data: fileBase64 } },
-        { type: "text", text: prompt },
-      ];
-
-  try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const resp2 = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -74,17 +105,14 @@ Regras:
       body: JSON.stringify({
         model: "claude-opus-4-5",
         max_tokens: 8000,
-        messages: [{ role: "user", content }],
+        messages: [{ role: "user", content: promptCategorizacao }],
       }),
     });
 
-    const data = await response.json();
+    const data2 = await resp2.json();
+    if (data2.error) return res.status(500).json({ error: data2.error.message });
 
-    if (data.error) {
-      return res.status(500).json({ error: data.error.message });
-    }
-
-    const text = data.content?.map((c) => c.text || "").join("") || "";
+    const text = data2.content?.map((c) => c.text || "").join("") || "";
     const clean = text.replace(/```json|```/g, "").trim();
     const jsonStart = clean.indexOf("{");
     const jsonEnd = clean.lastIndexOf("}");
