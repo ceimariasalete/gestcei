@@ -21,23 +21,28 @@ export default async function handler(req, res) {
     ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: fileBase64 } }
     : { type: "image", source: { type: "base64", media_type: mimeType, data: fileBase64 } };
 
-  // PASSO 1: Extrair texto bruto com datas exatas
-  const promptExtracao = `Voce e um leitor de extratos bancarios. Leia este documento e liste CADA lancamento financeiro no formato exato abaixo, um por linha:
+  // PASSO 1: Extrair lancamentos com datas corretas
+  const promptExtracao = `Leia este extrato bancario do Sicoob e extraia todos os lancamentos.
 
-DD/MM/AAAA | DESCRICAO | VALOR | D ou C
+REGRAS CRITICAS DE LEITURA:
+1. O extrato tem 3 colunas: DATA | HISTORICO | VALOR
+2. A data fica na coluna esquerda no formato DD/MM
+3. O ano esta no cabecalho: campo PERIODO (ex: 01/02/2026 = ano 2026)
+4. Quando um lancamento ocupa multiplas linhas (descricao longa), a data so aparece na primeira linha — as linhas seguintes como "Pagamento Pix", "DOC.:", "FAV.:" sao continuacao do mesmo lancamento, NAO tem data propria
+5. "SALDO DO DIA", "SALDO ANTERIOR", "SALDO BLOQ.ANTERIOR" NAO sao lancamentos — IGNORE completamente
+6. Quando o PDF quebra de pagina, o lancamento pode continuar na proxima pagina — use a data da primeira linha desse lancamento
+7. D = debito = saida, C = credito = entrada
 
-Regras de leitura:
-- No extrato Sicoob, cada lancamento comeca com a data DD/MM na coluna esquerda
-- A linha "SALDO DO DIA" NAO e um lancamento, ignore completamente
-- A linha "SALDO ANTERIOR" NAO e um lancamento, ignore completamente  
-- O ano fica no cabecalho do extrato no campo PERIODO
-- D = debito = saida, C = credito = entrada
-- Valor sem simbolo de moeda, use ponto como decimal (ex: 1234.56)
-- Liste TODOS os lancamentos sem pular nenhum
-- Retorne APENAS as linhas no formato pedido, sem cabecalho, sem explicacao`;
+Retorne APENAS uma lista assim, um lancamento por linha:
+DD/MM/AAAA|DESCRICAO|VALOR|TIPO
+Exemplo:
+23/02/2026|COMP VISA ELECTRO KOMPRAO JOINVILLE|142.47|D
+23/02/2026|PIX EMIT.OUTRA IF 550,00|550.00|D
+25/02/2026|PIX RECEB.OUTRA IF GUILHERME LUIS BRAZ|650.00|C
+
+Valor com ponto decimal, sem simbolo de moeda. Sem cabecalho, sem explicacao, apenas as linhas.`;
 
   try {
-    // Chamada 1: extrair lancamentos brutos
     const resp1 = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -57,24 +62,25 @@ Regras de leitura:
 
     const textoExtraido = data1.content?.map((c) => c.text || "").join("") || "";
 
-    // PASSO 2: Categorizar com base no texto já extraído
+    // PASSO 2: Categorizar
     const promptCategorizacao = `Voce e um assistente financeiro de um CEI (Centro de Educacao Infantil) em Joinville-SC.
 
-Abaixo estao os lancamentos financeiros ja extraidos de um extrato bancario, no formato:
-DD/MM/AAAA | DESCRICAO | VALOR | D ou C
+Abaixo estao os lancamentos financeiros extraidos de um extrato bancario, no formato:
+DD/MM/AAAA|DESCRICAO|VALOR|TIPO
 
 ${textoExtraido}
 
 Categorias disponiveis: ${catsTxt}
 
-Regras de categorizacao ja aprendidas (USE SEMPRE que o fornecedor/descricao bater):
+Regras de categorizacao ja aprendidas:
 ${regrasTxt || "Nenhuma regra ainda"}
 
-Para cada linha acima, retorne um JSON com este formato EXATO:
+Converta cada linha para o JSON abaixo. Use a data EXATAMENTE como esta na linha, convertendo para YYYY-MM-DD.
+
 {
   "lancamentos": [
     {
-      "descricao": "descricao limpa do lancamento",
+      "descricao": "descricao limpa",
       "valor": 123.45,
       "tipo": "saida",
       "data": "2026-02-23",
@@ -87,13 +93,10 @@ Para cada linha acima, retorne um JSON com este formato EXATO:
 }
 
 Regras:
-- tipo: "saida" se D (debito), "entrada" se C (credito)
-- valor: numero positivo sem simbolo
-- data: converta DD/MM/AAAA para YYYY-MM-DD exatamente como esta na linha
-- confianca: "alta" se categoria obvia, "media" se provavel, "baixa" se incerto
-- fornecedor_chave: nome padronizado do fornecedor
-- subcategoria_sugerida: so preencha se conseguir inferir
-- Retorne APENAS o JSON valido, sem texto adicional, sem markdown`;
+- tipo: "saida" se D, "entrada" se C
+- data: converta DD/MM/AAAA → YYYY-MM-DD exatamente como esta
+- confianca: "alta" obvia, "media" provavel, "baixa" incerto
+- Retorne APENAS JSON valido, sem markdown`;
 
     const resp2 = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
