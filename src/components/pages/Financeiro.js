@@ -41,6 +41,7 @@ export default function Financeiro() {
   const [uploadResultados, setUploadResultados] = useState([]);
   const [uploadErro, setUploadErro] = useState("");
   const [novaCat, setNovaCat] = useState("");
+  const [novaCatUpload, setNovaCatUpload] = useState("");
 
   const showMsg = (m) => { setMsg(m); setTimeout(() => setMsg(""), 4000); };
 
@@ -128,10 +129,16 @@ export default function Financeiro() {
     try {
       const resultado = await processarDocumentoIA(uploadFile, categorias, regras);
       const items = resultado.lancamentos || [];
-      setUploadResultados(items);
-      if (items.length === 0) setUploadErro("Nenhum lancamento encontrado no documento.");
-    } catch (e) { setUploadErro("Erro ao processar: " + e.message); }
-    setUploadLoading(false);
+      if (items.length === 0) {
+        setUploadErro("Nenhum lancamento encontrado no documento.");
+      } else {
+        setUploadResultados(items);
+      }
+    } catch (e) {
+      setUploadErro("Erro ao processar: " + e.message);
+    } finally {
+      setUploadLoading(false);
+    }
   }
 
   async function confirmarLancamentos() {
@@ -156,6 +163,17 @@ export default function Financeiro() {
     setUploadResultados([]); setUploadFile(null); setModal(null);
     setLoading(false); carregarLancamentos(); carregarRegras();
     showMsg(`${importados} lancamentos importados com sucesso!`);
+  }
+
+  async function adicionarCategoriaUpload() {
+    if (!novaCatUpload.trim()) return;
+    await supabase.from("financeiro_categorias").insert({ nome: novaCatUpload.trim() });
+    setNovaCatUpload(""); carregarCategorias();
+  }
+
+  async function removerCategoriaUpload(nome) {
+    await supabase.from("financeiro_categorias").delete().eq("nome", nome);
+    carregarCategorias();
   }
 
   async function adicionarCategoria() {
@@ -609,7 +627,7 @@ export default function Financeiro() {
                       <span style={{ fontSize: 11, color: "#888" }}>{fmt(l.data)}</span>
                       <span style={{ background: CONFIANCA_COLOR[l.confianca] || "#f0f0ee", color: CONFIANCA_TEXT[l.confianca] || "#555", padding: "2px 8px", borderRadius: 20, fontSize: 10 }}>{l.confianca}</span>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 26 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 26, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 12, color: "#888" }}>Categoria:</span>
                       <select value={l.categoria_sugerida}
                         onChange={(e) => setUploadResultados((prev) => prev.map((r, i) => i === idx ? { ...r, categoria_sugerida: e.target.value } : r))}
@@ -620,6 +638,27 @@ export default function Financeiro() {
                     </div>
                   </div>
                 ))}
+              </div>
+              <div style={{ background: "#f7f7f5", borderRadius: 8, padding: "10px 12px", marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 500, color: "#555", marginBottom: 8 }}>Gerenciar categorias</div>
+                <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                  <input value={novaCatUpload} onChange={(e) => setNovaCatUpload(e.target.value)}
+                    placeholder="Nova categoria..." onKeyDown={(e) => e.key === "Enter" && adicionarCategoriaUpload()}
+                    style={{ flex: 1, padding: "5px 8px", borderRadius: 6, border: "0.5px solid #ccc", fontSize: 12, fontFamily: "inherit" }} />
+                  <Btn small variant="primary" onClick={adicionarCategoriaUpload}>+ Adicionar</Btn>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {categorias.filter(c => !CATS_DEFAULT.includes(c)).map(cat => (
+                    <span key={cat} style={{ display: "flex", alignItems: "center", gap: 4, background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 20, padding: "3px 10px", fontSize: 11 }}>
+                      {cat}
+                      <button onClick={() => removerCategoriaUpload(cat)}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "#A32D2D", fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
+                    </span>
+                  ))}
+                  {categorias.filter(c => !CATS_DEFAULT.includes(c)).length === 0 && (
+                    <span style={{ fontSize: 11, color: "#aaa" }}>Nenhuma categoria personalizada ainda.</span>
+                  )}
+                </div>
               </div>
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                 <Btn onClick={() => { setUploadResultados([]); setUploadFile(null); }}>Voltar</Btn>
