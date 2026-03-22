@@ -182,3 +182,13 @@
     border-right-color: var(--border);
   }
 }
+
+/* ── Responsivo Mobile ── */
+@media (max-width: 640px) {
+  .hide-mobile { display: none !important; }
+  .show-mobile { display: block !important; }
+}
+@media (min-width: 641px) {
+  .hide-mobile { display: block; }
+  .show-mobile { display: none !important; }
+}
