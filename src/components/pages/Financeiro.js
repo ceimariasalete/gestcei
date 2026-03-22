@@ -42,6 +42,9 @@ export default function Financeiro() {
   const [uploadErro, setUploadErro] = useState("");
   const [novaCat, setNovaCat] = useState("");
   const [novaCatUpload, setNovaCatUpload] = useState("");
+  const [numAlunos, setNumAlunos] = useState(80);
+  const [horasDia, setHorasDia] = useState(8);
+  const [margemCalc, setMargemCalc] = useState(10);
 
   const showMsg = (m) => { setMsg(m); setTimeout(() => setMsg(""), 4000); };
 
@@ -143,14 +146,21 @@ export default function Financeiro() {
 
   async function confirmarLancamentos() {
     setLoading(true);
+    let importados = 0;
+    let duplicados = 0;
     for (const l of uploadResultados) {
       if (l._ignorar) continue;
+      // Verificar duplicata por data + valor + tipo + descricao
+      const { data: existe } = await supabase.from("financeiro")
+        .select("id").eq("data", l.data).eq("valor", l.valor).eq("tipo", l.tipo).eq("descricao", l.descricao).limit(1);
+      if (existe && existe.length > 0) { duplicados++; continue; }
       await supabase.from("financeiro").insert({
         descricao: l.descricao, valor: l.valor, tipo: l.tipo,
         categoria: l.categoria_sugerida, subcategoria: l.subcategoria_sugerida || null,
         data: l.data, observacao: `Importado via IA - ${uploadFile.name}`,
         usuario_id: usuario.id, usuario_nome: usuario.nome,
       });
+      importados++;
       if (l.fornecedor_chave && l.categoria_sugerida) {
         await supabase.from("financeiro_regras").upsert(
           { fornecedor_chave: l.fornecedor_chave, categoria: l.categoria_sugerida },
@@ -158,11 +168,11 @@ export default function Financeiro() {
         );
       }
     }
-    const importados = uploadResultados.filter((l) => !l._ignorar).length;
-    await log("financeiro", "INSERT", null, `Importou ${importados} lancamentos via IA de "${uploadFile.name}"`, null, null);
+    await log("financeiro", "INSERT", null, `Importou ${importados} lancamentos via IA de "${uploadFile.name}" (${duplicados} duplicados ignorados)`, null, null);
     setUploadResultados([]); setUploadFile(null); setModal(null);
     setLoading(false); carregarLancamentos(); carregarRegras();
-    showMsg(`${importados} lancamentos importados com sucesso!`);
+    const msg = duplicados > 0 ? `${importados} importados, ${duplicados} duplicados ignorados!` : `${importados} lancamentos importados com sucesso!`;
+    showMsg(msg);
   }
 
   async function adicionarCategoriaUpload() {
@@ -188,7 +198,7 @@ export default function Financeiro() {
   }
 
   return (
-    <div style={{ padding: "1.5rem", maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: "clamp(0.75rem, 3vw, 1.5rem)", maxWidth: 1200, margin: "0 auto" }}>
       {confirmData && <ConfirmModal {...confirmData} onCancel={() => setConfirmData(null)} />}
 
       <PageHeader title="Financeiro" subtitle="Fluxo de caixa, DRE e dashboard">
@@ -203,7 +213,7 @@ export default function Financeiro() {
 
       {/* Sub-abas + seletor de período */}
       <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 20, borderBottom: "0.5px solid #e0e0e0", paddingBottom: 12, flexWrap: "wrap" }}>
-        {[["lancamentos","Lancamentos"],["dre","DRE"],["dashboard","Dashboard"],["demissoes","Demissoes"],["regras","Regras IA"]].map(([k,l]) => (
+        {[["lancamentos","Lancamentos"],["dre","DRE"],["dashboard","Dashboard"],["demissoes","Custo/Aluno"],["regras","Regras IA"]].map(([k,l]) => (
           <button key={k} onClick={() => setAba(k)}
             style={{ padding: "6px 16px", borderRadius: 7, border: "none", cursor: "pointer", fontSize: 13,
               background: aba === k ? "#1D9E75" : "transparent",
@@ -217,7 +227,7 @@ export default function Financeiro() {
       <Msg text={msg} />
 
       {/* KPIs sempre visíveis */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 12, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 8, marginBottom: 20 }}>
         <MetricCard label="Receita total" value={fmtMoeda(totalEntradas)} subColor="#1D9E75" sub="entradas" accent="#E1F5EE" />
         <MetricCard label="Despesa total" value={fmtMoeda(totalSaidas)} subColor="#A32D2D" sub="saidas" accent="#FCEBEB" />
         <MetricCard label="Resultado" value={fmtMoeda(saldo)} subColor={saldo >= 0 ? "#1D9E75" : "#A32D2D"} sub={saldo >= 0 ? "superavit" : "deficit"} />
@@ -247,35 +257,63 @@ export default function Financeiro() {
               </button>
             )}
           </div>
-          <Table headers={["Data","Descricao","Categoria","Tipo","Valor","Por",""]}>
+          {/* Desktop: tabela */}
+          <div className="hide-mobile">
+            <Table headers={["Data","Descricao","Categoria","Tipo","Valor","Por",""]}>
+              {lancFiltrados.map((l) => (
+                <tr key={l.id} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
+                  <td style={{ padding: "10px 14px", fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{fmt(l.data)}</td>
+                  <td style={{ padding: "10px 14px", fontSize: 13 }}>
+                    <span style={{ fontWeight: 500 }}>{l.descricao}</span>
+                    {l.observacao && <div style={{ fontSize: 11, color: "#aaa" }}>{l.observacao}</div>}
+                  </td>
+                  <td style={{ padding: "10px 14px", fontSize: 12, color: "#555" }}>
+                    {l.categoria}
+                    {l.subcategoria && <div style={{ fontSize: 11, color: "#aaa" }}>↳ {l.subcategoria}</div>}
+                  </td>
+                  <td style={{ padding: "10px 14px" }}>
+                    <span style={{ padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 500,
+                      background: l.tipo === "entrada" ? "#EAF3DE" : "#FCEBEB",
+                      color: l.tipo === "entrada" ? "#27500A" : "#791F1F" }}>{l.tipo}</span>
+                  </td>
+                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 500, color: l.tipo === "entrada" ? "#1D9E75" : "#A32D2D" }}>
+                    {l.tipo === "entrada" ? "+" : "-"}{fmtMoeda(l.valor)}
+                  </td>
+                  <td style={{ padding: "10px 14px", fontSize: 12, color: "#888" }}>{l.usuario_nome}</td>
+                  <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
+                    <Btn small onClick={() => { setForm({ ...l, valor: String(l.valor) }); setEditLanc(l); setModal("form"); }} style={{ marginRight: 4 }}>Editar</Btn>
+                    <Btn small variant="danger" onClick={() => setConfirmData({ title: "Excluir lancamento", message: `Excluir "${l.descricao}"?`, onConfirm: () => excluir(l) })}>Excluir</Btn>
+                  </td>
+                </tr>
+              ))}
+              {lancFiltrados.length === 0 && <EmptyRow colSpan={7} message="Nenhum lancamento encontrado." />}
+            </Table>
+          </div>
+          {/* Mobile: cards */}
+          <div className="show-mobile">
+            {lancFiltrados.length === 0 && <div style={{ padding: "2rem", textAlign: "center", color: "#aaa", fontSize: 13 }}>Nenhum lancamento encontrado.</div>}
             {lancFiltrados.map((l) => (
-              <tr key={l.id} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
-                <td style={{ padding: "10px 14px", fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{fmt(l.data)}</td>
-                <td style={{ padding: "10px 14px", fontSize: 13 }}>
-                  <span style={{ fontWeight: 500 }}>{l.descricao}</span>
-                  {l.observacao && <div style={{ fontSize: 11, color: "#aaa" }}>{l.observacao}</div>}
-                </td>
-                <td style={{ padding: "10px 14px", fontSize: 12, color: "#555" }}>
-                  {l.categoria}
-                  {l.subcategoria && <div style={{ fontSize: 11, color: "#aaa" }}>↳ {l.subcategoria}</div>}
-                </td>
-                <td style={{ padding: "10px 14px" }}>
-                  <span style={{ padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 500,
+              <div key={l.id} style={{ padding: "12px 14px", borderBottom: "0.5px solid #f0f0f0" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+                  <span style={{ fontSize: 13, fontWeight: 500, flex: 1, marginRight: 8 }}>{l.descricao}</span>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: l.tipo === "entrada" ? "#1D9E75" : "#A32D2D", whiteSpace: "nowrap" }}>
+                    {l.tipo === "entrada" ? "+" : "-"}{fmtMoeda(l.valor)}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, color: "#888" }}>{fmt(l.data)}</span>
+                  <span style={{ fontSize: 11, color: "#555", background: "#f5f5f3", padding: "1px 7px", borderRadius: 10 }}>{l.categoria}</span>
+                  <span style={{ padding: "1px 8px", borderRadius: 20, fontSize: 10, fontWeight: 500,
                     background: l.tipo === "entrada" ? "#EAF3DE" : "#FCEBEB",
                     color: l.tipo === "entrada" ? "#27500A" : "#791F1F" }}>{l.tipo}</span>
-                </td>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 500, color: l.tipo === "entrada" ? "#1D9E75" : "#A32D2D" }}>
-                  {l.tipo === "entrada" ? "+" : "-"}{fmtMoeda(l.valor)}
-                </td>
-                <td style={{ padding: "10px 14px", fontSize: 12, color: "#888" }}>{l.usuario_nome}</td>
-                <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
-                  <Btn small onClick={() => { setForm({ ...l, valor: String(l.valor) }); setEditLanc(l); setModal("form"); }} style={{ marginRight: 4 }}>Editar</Btn>
+                </div>
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <Btn small onClick={() => { setForm({ ...l, valor: String(l.valor) }); setEditLanc(l); setModal("form"); }}>Editar</Btn>
                   <Btn small variant="danger" onClick={() => setConfirmData({ title: "Excluir lancamento", message: `Excluir "${l.descricao}"?`, onConfirm: () => excluir(l) })}>Excluir</Btn>
-                </td>
-              </tr>
+                </div>
+              </div>
             ))}
-            {lancFiltrados.length === 0 && <EmptyRow colSpan={7} message="Nenhum lancamento encontrado." />}
-          </Table>
+          </div>
         </>
       )}
 
@@ -456,80 +494,139 @@ export default function Financeiro() {
         </div>
       )}
 
-      {/* ── DEMISSOES ── */}
-      {aba === "demissoes" && (
-        <div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginBottom: 20 }}>
-            <MetricCard label="Total demissoes" value={fmtMoeda(totalDemissoes)} subColor="#A32D2D" sub="no periodo" accent="#FFF5F5" />
-            <MetricCard label="% sobre despesas" value={totalSaidas > 0 ? `${Math.round((totalDemissoes/totalSaidas)*100)}%` : "0%"} sub="do total de saidas" subColor="#A32D2D" />
-            <MetricCard label="% sobre receita" value={totalEntradas > 0 ? `${Math.round((totalDemissoes/totalEntradas)*100)}%` : "0%"} sub="da receita bruta" subColor="#BA7517" />
-            <MetricCard label="Lancamentos" value={lancamentos.filter(l => CATS_DEMISSAO.includes(l.categoria)).length} sub="registros de demissao" />
-          </div>
-
-          {totalDemissoes > 0 && (
-            <AlertBar type="danger">
-              Encargos de demissao representam {totalSaidas > 0 ? Math.round((totalDemissoes/totalSaidas)*100) : 0}% das despesas no periodo selecionado.
-            </AlertBar>
-          )}
-
-          <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, overflow: "hidden", marginBottom: 16 }}>
-            <div style={{ padding: "16px 20px", borderBottom: "0.5px solid #e0e0e0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 14, fontWeight: 500 }}>Detalhamento por tipo de encargo</span>
-              <BotaoExportar
-                dados={CATS_DEMISSAO.map(cat => ({ Categoria: cat, Total: fmtMoeda(lancamentos.filter(l => l.categoria === cat).reduce((s,l) => s+Number(l.valor),0)) }))}
-                nomeArquivo="demissoes" label="Exportar" />
+      {/* ── CUSTO/ALUNO ── */}
+      {aba === "demissoes" && (() => {
+        const custoTotal = totalSaidas;
+        const custoAluno = numAlunos > 0 ? custoTotal / numAlunos : 0;
+        // Horas totais no mes (dias uteis ~22)
+        const horasMes = horasDia * 22;
+        const custoHora = horasMes > 0 ? custoAluno / horasMes : 0;
+        // Calculadora: valor sugerido com margem
+        const valorSugerido = custoAluno * (1 + margemCalc / 100);
+        // Breakdown por categoria
+        const catsCusto = [
+          { nome: "Salarios", cats: ["Salarios", "Encargos Trabalhistas"] },
+          { nome: "Alimentacao", cats: ["Alimentacao"] },
+          { nome: "Material Pedagogico", cats: ["Material Pedagogico"] },
+          { nome: "Agua/Energia/Tel", cats: ["Agua/Energia", "Telefone/Internet"] },
+          { nome: "Contabilidade/Nutri", cats: ["Contabilidade", "Nutricionista"] },
+          { nome: "Outros", cats: ["Manutencao", "Limpeza", "Transporte", "Seguro", "Outros"] },
+        ];
+        return (
+          <div>
+            {/* KPIs principais */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginBottom: 20 }}>
+              <MetricCard label="Custo total" value={fmtMoeda(custoTotal)} subColor="#A32D2D" sub="despesas no periodo" accent="#FCEBEB" />
+              <MetricCard label="Custo por aluno" value={fmtMoeda(custoAluno)} subColor="#A32D2D" sub={`com ${numAlunos} alunos`} accent="#FFF5F5" />
+              <MetricCard label="Custo por hora" value={fmtMoeda(custoHora)} subColor="#BA7517" sub={`${horasDia}h/dia x 22 dias`} accent="#FAEEDA" />
+              <MetricCard label="Mensalidade sugerida" value={fmtMoeda(valorSugerido)} subColor="#1D9E75" sub={`com ${margemCalc}% de margem`} accent="#E1F5EE" />
             </div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr style={{ background: "#f7f7f5" }}>
-                <th style={{ padding: "10px 20px", fontSize: 12, fontWeight: 500, color: "#777", textAlign: "left", borderBottom: "0.5px solid #e0e0e0" }}>Tipo de encargo</th>
-                <th style={{ padding: "10px 20px", fontSize: 12, fontWeight: 500, color: "#777", textAlign: "right", borderBottom: "0.5px solid #e0e0e0" }}>Total no periodo</th>
-                <th style={{ padding: "10px 20px", fontSize: 12, fontWeight: 500, color: "#777", textAlign: "right", borderBottom: "0.5px solid #e0e0e0" }}>% do total</th>
-              </tr></thead>
-              <tbody>
-                {CATS_DEMISSAO.map((cat) => {
-                  const total = lancamentos.filter((l) => l.categoria === cat).reduce((s, l) => s + Number(l.valor), 0);
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+              {/* Calculadora */}
+              <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, padding: "1.25rem" }}>
+                <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 16 }}>Calculadora de mensalidade</div>
+
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>Numero de alunos</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input type="range" min={10} max={150} value={numAlunos} onChange={e => setNumAlunos(Number(e.target.value))}
+                      style={{ flex: 1, accentColor: "#1D9E75" }} />
+                    <input type="number" value={numAlunos} onChange={e => setNumAlunos(Number(e.target.value))}
+                      style={{ width: 60, padding: "4px 8px", borderRadius: 6, border: "0.5px solid #ccc", fontSize: 13, textAlign: "center", fontFamily: "inherit" }} />
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>Horas por dia que o aluno fica</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input type="range" min={1} max={12} value={horasDia} onChange={e => setHorasDia(Number(e.target.value))}
+                      style={{ flex: 1, accentColor: "#1D9E75" }} />
+                    <input type="number" value={horasDia} onChange={e => setHorasDia(Number(e.target.value))}
+                      style={{ width: 60, padding: "4px 8px", borderRadius: 6, border: "0.5px solid #ccc", fontSize: 13, textAlign: "center", fontFamily: "inherit" }} />
+                    <span style={{ fontSize: 12, color: "#888" }}>h</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>
+                    {horasDia <= 4 ? "Meio periodo (manha ou tarde)" : horasDia <= 7 ? "Periodo estendido" : "Periodo integral"}
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>Margem de sustentabilidade (%)</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input type="range" min={0} max={50} value={margemCalc} onChange={e => setMargemCalc(Number(e.target.value))}
+                      style={{ flex: 1, accentColor: "#1D9E75" }} />
+                    <input type="number" value={margemCalc} onChange={e => setMargemCalc(Number(e.target.value))}
+                      style={{ width: 60, padding: "4px 8px", borderRadius: 6, border: "0.5px solid #ccc", fontSize: 13, textAlign: "center", fontFamily: "inherit" }} />
+                    <span style={{ fontSize: 12, color: "#888" }}>%</span>
+                  </div>
+                </div>
+
+                <div style={{ background: "#E1F5EE", borderRadius: 10, padding: "16px", textAlign: "center" }}>
+                  <div style={{ fontSize: 12, color: "#085041", marginBottom: 4 }}>Mensalidade sugerida</div>
+                  <div style={{ fontSize: 28, fontWeight: 600, color: "#085041" }}>{fmtMoeda(valorSugerido)}</div>
+                  <div style={{ fontSize: 11, color: "#1D9E75", marginTop: 4 }}>
+                    {fmtMoeda(custoHora)}/hora · {fmtMoeda(custoAluno)} custo real por aluno
+                  </div>
+                </div>
+              </div>
+
+              {/* Breakdown de custos */}
+              <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, padding: "1.25rem" }}>
+                <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 16 }}>Composicao do custo por aluno</div>
+                {catsCusto.map(({ nome, cats }) => {
+                  const total = lancamentos.filter(l => cats.includes(l.categoria) && l.tipo === "saida").reduce((s,l) => s + Number(l.valor), 0);
                   if (total === 0) return null;
+                  const porAluno = numAlunos > 0 ? total / numAlunos : 0;
+                  const pct = custoTotal > 0 ? Math.round((total / custoTotal) * 100) : 0;
                   return (
-                    <tr key={cat} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
-                      <td style={{ padding: "10px 20px", fontSize: 13, fontWeight: 500 }}>{cat}</td>
-                      <td style={{ padding: "10px 20px", fontSize: 13, textAlign: "right", color: "#A32D2D", fontWeight: 500 }}>{fmtMoeda(total)}</td>
-                      <td style={{ padding: "10px 20px", fontSize: 13, textAlign: "right", color: "#888" }}>
-                        {totalDemissoes > 0 ? Math.round((total/totalDemissoes)*100) : 0}%
-                      </td>
-                    </tr>
+                    <div key={nome} style={{ marginBottom: 12 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                        <span style={{ color: "#555", fontWeight: 500 }}>{nome}</span>
+                        <span style={{ color: "#333" }}>{fmtMoeda(porAluno)}/aluno <span style={{ color: "#aaa" }}>({pct}%)</span></span>
+                      </div>
+                      <div style={{ height: 6, background: "#f0f0ee", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${pct}%`, background: "#1D9E75", borderRadius: 3, opacity: 0.7 }} />
+                      </div>
+                    </div>
                   );
                 })}
-                {totalDemissoes === 0 && (
-                  <tr><td colSpan={3} style={{ padding: 24, textAlign: "center", fontSize: 13, color: "#aaa" }}>
-                    Nenhum encargo de demissao no periodo. Para registrar, crie um lancamento com categoria "Encargos de Demissao".
-                  </td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Lançamentos de demissão */}
-          <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, overflow: "hidden" }}>
-            <div style={{ padding: "16px 20px", borderBottom: "0.5px solid #e0e0e0", fontSize: 14, fontWeight: 500 }}>
-              Lancamentos de encargos
+                {custoTotal === 0 && <div style={{ fontSize: 13, color: "#aaa", textAlign: "center", padding: "2rem 0" }}>Sem despesas no periodo selecionado.</div>}
+              </div>
             </div>
-            <Table headers={["Data","Descricao","Tipo de encargo","Valor","Por"]}>
-              {lancamentos.filter((l) => CATS_DEMISSAO.includes(l.categoria)).map((l) => (
-                <tr key={l.id} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
-                  <td style={{ padding: "10px 14px", fontSize: 12, color: "#888" }}>{fmt(l.data)}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 500 }}>{l.descricao}</td>
-                  <td style={{ padding: "10px 14px" }}><Badge color="danger">{l.categoria}</Badge></td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 500, color: "#A32D2D" }}>-{fmtMoeda(l.valor)}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 12, color: "#888" }}>{l.usuario_nome}</td>
-                </tr>
-              ))}
-              {lancamentos.filter((l) => CATS_DEMISSAO.includes(l.categoria)).length === 0 && (
-                <EmptyRow colSpan={5} message="Nenhum encargo de demissao no periodo." />
-              )}
-            </Table>
+
+            {/* Tabela simulacao por turno */}
+            <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ padding: "16px 20px", borderBottom: "0.5px solid #e0e0e0", fontSize: 14, fontWeight: 500 }}>
+                Simulacao por turno
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr style={{ background: "#f7f7f5" }}>
+                  {["Turno","Horas/dia","Custo real","Sugerido (+"+margemCalc+"%)"].map(h => (
+                    <th key={h} style={{ padding: "10px 20px", fontSize: 12, fontWeight: 500, color: "#777", textAlign: h === "Turno" ? "left" : "right", borderBottom: "0.5px solid #e0e0e0" }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {[["Meio periodo","4h",4],["Periodo estendido","6h",6],["Integral","8h",8],["Integral plus","10h",10]].map(([turno, label, h]) => {
+                    const custo = numAlunos > 0 ? (custoTotal / numAlunos / (8 * 22)) * (h * 22) : 0;
+                    const sugerido = custo * (1 + margemCalc / 100);
+                    return (
+                      <tr key={turno} style={{ borderBottom: "0.5px solid #f0f0f0", background: h === horasDia ? "#F0FAF6" : "transparent" }}>
+                        <td style={{ padding: "12px 20px", fontSize: 13, fontWeight: h === horasDia ? 600 : 400 }}>
+                          {turno} {h === horasDia && <span style={{ fontSize: 10, background: "#1D9E75", color: "#fff", padding: "1px 6px", borderRadius: 10, marginLeft: 6 }}>selecionado</span>}
+                        </td>
+                        <td style={{ padding: "12px 20px", fontSize: 13, textAlign: "right", color: "#888" }}>{label}</td>
+                        <td style={{ padding: "12px 20px", fontSize: 13, textAlign: "right", color: "#A32D2D", fontWeight: 500 }}>{fmtMoeda(custo)}</td>
+                        <td style={{ padding: "12px 20px", fontSize: 13, textAlign: "right", color: "#1D9E75", fontWeight: 600 }}>{fmtMoeda(sugerido)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── REGRAS DA IA ── */}
       {aba === "regras" && (
