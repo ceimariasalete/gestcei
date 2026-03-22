@@ -42,6 +42,7 @@ export default function Financeiro() {
   const [uploadErro, setUploadErro] = useState("");
   const [novaCat, setNovaCat] = useState("");
   const [novaCatUpload, setNovaCatUpload] = useState("");
+  const [selecionados, setSelecionados] = useState([]);
   const [numAlunos, setNumAlunos] = useState(80);
   const [horasDia, setHorasDia] = useState(8);
   const [margemCalc, setMargemCalc] = useState(10);
@@ -175,6 +176,31 @@ export default function Financeiro() {
     showMsg(msg);
   }
 
+  async function excluirSelecionados() {
+    setLoading(true);
+    for (const id of selecionados) {
+      const l = lancamentos.find(x => x.id === id);
+      await supabase.from("financeiro").delete().eq("id", id);
+      if (l) await log("financeiro", "DELETE", id, `Excluiu lancamento "${l.descricao}"`, l, null);
+    }
+    setSelecionados([]);
+    setLoading(false);
+    carregarLancamentos();
+    showMsg(`${selecionados.length} lancamentos excluidos!`);
+  }
+
+  function toggleSelecionado(id) {
+    setSelecionados(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  function toggleTodos() {
+    if (selecionados.length === lancFiltrados.length) {
+      setSelecionados([]);
+    } else {
+      setSelecionados(lancFiltrados.map(l => l.id));
+    }
+  }
+
   async function adicionarCategoriaUpload() {
     if (!novaCatUpload.trim()) return;
     await supabase.from("financeiro_categorias").insert({ nome: novaCatUpload.trim() });
@@ -238,6 +264,7 @@ export default function Financeiro() {
       {/* ── LANCAMENTOS ── */}
       {aba === "lancamentos" && (
         <>
+          {/* Filtros + barra de ações em lote */}
           <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
             <select value={tipoFiltro} onChange={(e) => setTipoFiltro(e.target.value)}
               style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #e0e0e0", fontSize: 13, fontFamily: "inherit", background: "#fff", color: tipoFiltro ? "#085041" : "#555", fontWeight: tipoFiltro ? 500 : 400, cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", minWidth: 140 }}>
@@ -256,12 +283,40 @@ export default function Financeiro() {
                 ✕ Limpar filtros
               </button>
             )}
+            {selecionados.length > 0 && (
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", background: "#FCEBEB", padding: "6px 14px", borderRadius: 8 }}>
+                <span style={{ fontSize: 12, color: "#791F1F", fontWeight: 500 }}>{selecionados.length} selecionado(s)</span>
+                <Btn small variant="danger" onClick={() => setConfirmData({
+                  title: "Excluir selecionados",
+                  message: `Excluir ${selecionados.length} lancamento(s) selecionados?`,
+                  onConfirm: excluirSelecionados
+                })}>Excluir todos</Btn>
+                <button onClick={() => setSelecionados([])}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#A32D2D", padding: 0 }}>✕</button>
+              </div>
+            )}
           </div>
+
           {/* Desktop: tabela */}
           <div className="hide-mobile">
-            <Table headers={["Data","Descricao","Categoria","Tipo","Valor","Por",""]}>
+            <Table headers={["", "Data","Descricao","Categoria","Tipo","Valor","Por",""]}>
+              <tr style={{ background: "#f7f7f5" }}>
+                <td style={{ padding: "8px 14px" }}>
+                  <input type="checkbox"
+                    checked={lancFiltrados.length > 0 && selecionados.length === lancFiltrados.length}
+                    onChange={toggleTodos}
+                    style={{ width: 15, height: 15, accentColor: "#1D9E75", cursor: "pointer" }} />
+                </td>
+                <td colSpan={7} style={{ padding: "8px 14px", fontSize: 11, color: "#888" }}>
+                  {selecionados.length === 0 ? "Selecionar todos" : `${selecionados.length} de ${lancFiltrados.length} selecionados`}
+                </td>
+              </tr>
               {lancFiltrados.map((l) => (
-                <tr key={l.id} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
+                <tr key={l.id} style={{ borderBottom: "0.5px solid #f0f0f0", background: selecionados.includes(l.id) ? "#F0FAF6" : "transparent" }}>
+                  <td style={{ padding: "10px 14px" }}>
+                    <input type="checkbox" checked={selecionados.includes(l.id)} onChange={() => toggleSelecionado(l.id)}
+                      style={{ width: 15, height: 15, accentColor: "#1D9E75", cursor: "pointer" }} />
+                  </td>
                   <td style={{ padding: "10px 14px", fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{fmt(l.data)}</td>
                   <td style={{ padding: "10px 14px", fontSize: 13 }}>
                     <span style={{ fontWeight: 500 }}>{l.descricao}</span>
@@ -286,28 +341,40 @@ export default function Financeiro() {
                   </td>
                 </tr>
               ))}
-              {lancFiltrados.length === 0 && <EmptyRow colSpan={7} message="Nenhum lancamento encontrado." />}
+              {lancFiltrados.length === 0 && <EmptyRow colSpan={8} message="Nenhum lancamento encontrado." />}
             </Table>
           </div>
-          {/* Mobile: cards */}
+
+          {/* Mobile: cards com checkbox */}
           <div className="show-mobile">
+            {lancFiltrados.length > 0 && (
+              <div style={{ padding: "10px 14px", borderBottom: "0.5px solid #f0f0f0", display: "flex", alignItems: "center", gap: 10, background: "#f7f7f5" }}>
+                <input type="checkbox"
+                  checked={selecionados.length === lancFiltrados.length}
+                  onChange={toggleTodos}
+                  style={{ width: 16, height: 16, accentColor: "#1D9E75" }} />
+                <span style={{ fontSize: 12, color: "#888" }}>Selecionar todos ({lancFiltrados.length})</span>
+              </div>
+            )}
             {lancFiltrados.length === 0 && <div style={{ padding: "2rem", textAlign: "center", color: "#aaa", fontSize: 13 }}>Nenhum lancamento encontrado.</div>}
             {lancFiltrados.map((l) => (
-              <div key={l.id} style={{ padding: "12px 14px", borderBottom: "0.5px solid #f0f0f0" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
-                  <span style={{ fontSize: 13, fontWeight: 500, flex: 1, marginRight: 8 }}>{l.descricao}</span>
+              <div key={l.id} style={{ padding: "12px 14px", borderBottom: "0.5px solid #f0f0f0", background: selecionados.includes(l.id) ? "#F0FAF6" : "transparent" }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 4 }}>
+                  <input type="checkbox" checked={selecionados.includes(l.id)} onChange={() => toggleSelecionado(l.id)}
+                    style={{ width: 16, height: 16, accentColor: "#1D9E75", marginTop: 2, flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, fontWeight: 500, flex: 1 }}>{l.descricao}</span>
                   <span style={{ fontSize: 14, fontWeight: 600, color: l.tipo === "entrada" ? "#1D9E75" : "#A32D2D", whiteSpace: "nowrap" }}>
                     {l.tipo === "entrada" ? "+" : "-"}{fmtMoeda(l.valor)}
                   </span>
                 </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", paddingLeft: 26 }}>
                   <span style={{ fontSize: 11, color: "#888" }}>{fmt(l.data)}</span>
                   <span style={{ fontSize: 11, color: "#555", background: "#f5f5f3", padding: "1px 7px", borderRadius: 10 }}>{l.categoria}</span>
                   <span style={{ padding: "1px 8px", borderRadius: 20, fontSize: 10, fontWeight: 500,
                     background: l.tipo === "entrada" ? "#EAF3DE" : "#FCEBEB",
                     color: l.tipo === "entrada" ? "#27500A" : "#791F1F" }}>{l.tipo}</span>
                 </div>
-                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <div style={{ display: "flex", gap: 6, marginTop: 8, paddingLeft: 26 }}>
                   <Btn small onClick={() => { setForm({ ...l, valor: String(l.valor) }); setEditLanc(l); setModal("form"); }}>Editar</Btn>
                   <Btn small variant="danger" onClick={() => setConfirmData({ title: "Excluir lancamento", message: `Excluir "${l.descricao}"?`, onConfirm: () => excluir(l) })}>Excluir</Btn>
                 </div>
