@@ -184,11 +184,8 @@
 }
 
 /* ── Responsivo Mobile ── */
+.show-mobile { display: none !important; }
 @media (max-width: 640px) {
   .hide-mobile { display: none !important; }
   .show-mobile { display: block !important; }
-}
-@media (min-width: 641px) {
-  .hide-mobile { display: block; }
-  .show-mobile { display: none !important; }
 }
