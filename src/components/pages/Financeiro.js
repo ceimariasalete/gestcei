@@ -580,11 +580,11 @@ export default function Financeiro() {
       {aba === "demissoes" && (() => {
         const custoTotal = totalSaidas;
         const custoAluno = numAlunos > 0 ? custoTotal / numAlunos : 0;
-        // Horas totais no mes (dias uteis ~22)
-        const horasMes = horasDia * 22;
-        const custoHora = horasMes > 0 ? custoAluno / horasMes : 0;
-        // Calculadora: valor sugerido com margem
-        const valorSugerido = custoAluno * (1 + margemCalc / 100);
+        // Custo/hora baseado em 8h integral como referencia
+        const custoHora = custoAluno / (8 * 22);
+        // Mensalidade proporcional as horas contratadas
+        const custoMensalidade = custoHora * horasDia * 22;
+        const valorSugerido = custoMensalidade * (1 + margemCalc / 100);
         // Breakdown por categoria
         const catsCusto = [
           { nome: "Salarios", cats: ["Salarios", "Encargos Trabalhistas"] },
@@ -601,7 +601,7 @@ export default function Financeiro() {
               <MetricCard label="Custo total" value={fmtMoeda(custoTotal)} subColor="#A32D2D" sub="despesas no periodo" accent="#FCEBEB" />
               <MetricCard label="Custo por aluno" value={fmtMoeda(custoAluno)} subColor="#A32D2D" sub={`com ${numAlunos} alunos`} accent="#FFF5F5" />
               <MetricCard label="Custo por hora" value={fmtMoeda(custoHora)} subColor="#BA7517" sub={`${horasDia}h/dia x 22 dias`} accent="#FAEEDA" />
-              <MetricCard label="Mensalidade sugerida" value={fmtMoeda(valorSugerido)} subColor="#1D9E75" sub={`com ${margemCalc}% de margem`} accent="#E1F5EE" />
+              <MetricCard label="Mensalidade sugerida" value={fmtMoeda(valorSugerido)} subColor="#1D9E75" sub={`${horasDia}h/dia · ${margemCalc}% margem`} accent="#E1F5EE" />
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
@@ -648,7 +648,7 @@ export default function Financeiro() {
                   <div style={{ fontSize: 12, color: "#085041", marginBottom: 4 }}>Mensalidade sugerida</div>
                   <div style={{ fontSize: 28, fontWeight: 600, color: "#085041" }}>{fmtMoeda(valorSugerido)}</div>
                   <div style={{ fontSize: 11, color: "#1D9E75", marginTop: 4 }}>
-                    {fmtMoeda(custoHora)}/hora · {fmtMoeda(custoAluno)} custo real por aluno
+                    {fmtMoeda(custoHora)}/hora · {fmtMoeda(custoMensalidade)} custo real ({horasDia}h/dia)
                   </div>
                 </div>
               </div>
@@ -690,7 +690,7 @@ export default function Financeiro() {
                 </tr></thead>
                 <tbody>
                   {[["Meio periodo","4h",4],["Periodo estendido","6h",6],["Integral","8h",8],["Integral plus","10h",10]].map(([turno, label, h]) => {
-                    const custo = numAlunos > 0 ? (custoTotal / numAlunos / (8 * 22)) * (h * 22) : 0;
+                    const custo = custoHora * h * 22;
                     const sugerido = custo * (1 + margemCalc / 100);
                     return (
                       <tr key={turno} style={{ borderBottom: "0.5px solid #f0f0f0", background: h === horasDia ? "#F0FAF6" : "transparent" }}>
