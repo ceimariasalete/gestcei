@@ -10,7 +10,16 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://localhost:3000'
+      '/api': 'http://localhost:3000',
+      '/supabase': {
+        target: 'https://104.18.38.10',
+        changeOrigin: true,
+        secure: false,
+        headers: {
+          'Host': 'xyxpyljufhnwuqmpqbxx.supabase.co'
+        },
+        rewrite: (path) => path.replace(/^\/supabase/, '')
+      }
     }
   }
 })
