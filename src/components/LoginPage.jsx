@@ -14,9 +14,19 @@ export default function LoginPage() {
     setErro("");
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password: senha });
-    if (error) {
-      setErro("E-mail ou senha incorretos.");
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password: senha });
+      if (error) {
+        setErro("E-mail ou senha incorretos.");
+        setLoading(false);
+        return;
+      }
+    } catch (err) {
+      if (err.message?.includes("fetch") || err.name === "TypeError") {
+        setErro("Erro de conexão com o servidor. Verifique sua internet ou DNS.");
+      } else {
+        setErro("Erro inesperado ao entrar. Tente novamente.");
+      }
       setLoading(false);
       return;
     }
