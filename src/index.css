@@ -1,0 +1,89 @@
+/* ════════════════════════════════════════
+   GESTCEI — Global CSS
+   ════════════════════════════════════════ */
+
+*, *::before, *::after { box-sizing: border-box; }
+html { overflow-x: hidden; }
+
+body {
+  margin: 0;
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #333;
+  background: #f4f4f2;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+#root {
+  width: 100%;
+  max-width: 100%;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+}
+
+/* ── Toggle Mobile/Desktop ── */
+.show-mobile { display: none !important; }
+
+@media (max-width: 640px) {
+  .hide-mobile      { display: none !important; }
+  .show-mobile      { display: block !important; }
+  .show-mobile-flex { display: flex !important; }
+
+  /* Páginas */
+  .page-content { padding: 0.75rem !important; }
+
+  /* Grids */
+  .grid-2col    { grid-template-columns: 1fr !important; }
+  .grid-metrics { grid-template-columns: 1fr 1fr !important; }
+  .kpi-grid     { grid-template-columns: 1fr 1fr !important; }
+
+  /* Tabelas */
+  .table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 12px;
+  }
+  table { min-width: 520px; }
+
+  /* Formulários — evita zoom no iOS */
+  input, select, textarea { font-size: 16px !important; }
+
+  /* Sub-abas scroll horizontal */
+  .sub-abas {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap !important;
+    padding-bottom: 4px;
+  }
+  .sub-abas::-webkit-scrollbar { height: 0; }
+
+  /* Filtros empilhados */
+  .filtros-row { flex-direction: column !important; }
+  .filtros-row > * { width: 100% !important; }
+
+  /* Header de página */
+  .page-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+  }
+  .page-header-actions {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* Tipografia */
+  h1 { font-size: 20px; }
+  h2 { font-size: 17px; }
+}
+
+/* ── Scrollbar fina ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #ddd; border-radius: 4px; }
