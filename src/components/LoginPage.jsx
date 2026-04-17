@@ -5,46 +5,58 @@ import { Btn, Input, AlertBar } from "./ui";
 
 export default function LoginPage() {
   const { handleLogin } = useApp();
-  const [email, setEmail] = useState("");
-  const [senha, setSenha] = useState("");
   const [erro, setErro] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit() {
+  async function handleSubmit(e) {
+    if (e) e.preventDefault();
     setErro("");
     setLoading(true);
 
+    const formData = new FormData(e.target);
+    const email = formData.get("email");
+    const senha = formData.get("senha");
+
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password: senha });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("fetch_timeout")), 8000)
+      );
+
+      const loginResult = await Promise.race([
+        supabase.auth.signInWithPassword({ email, password: senha }),
+        timeoutPromise
+      ]);
+
+      const { error } = loginResult;
+
       if (error) {
         setErro("E-mail ou senha incorretos.");
         setLoading(false);
         return;
       }
+
+      const { data: usr } = await supabase
+        .from("usuarios")
+        .select("*")
+        .eq("email", email)
+        .single();
+
+      if (!usr || !usr.ativo) {
+        setErro("Usuario inativo ou nao cadastrado. Contate o administrador.");
+        setLoading(false);
+        return;
+      }
+
+      handleLogin(usr);
     } catch (err) {
-      if (err.message?.includes("fetch") || err.name === "TypeError") {
-        setErro("Erro de conexão com o servidor. Verifique sua internet ou DNS.");
+      if (err.message === "fetch_timeout" || err.message?.includes("fetch") || err.name === "TypeError") {
+        setErro("Erro de conexão com o servidor. A rede local, Wi-Fi ou DNS estão bloqueando o banco de dados.");
       } else {
         setErro("Erro inesperado ao entrar. Tente novamente.");
       }
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const { data: usr } = await supabase
-      .from("usuarios")
-      .select("*")
-      .eq("email", email)
-      .single();
-
-    if (!usr || !usr.ativo) {
-      setErro("Usuario inativo ou nao cadastrado. Contate o administrador.");
-      setLoading(false);
-      return;
-    }
-
-    handleLogin(usr);
-    setLoading(false);
   }
 
   return (
@@ -78,30 +90,35 @@ export default function LoginPage() {
 
         {erro && <AlertBar type="danger">{erro}</AlertBar>}
 
-        <Input
-          label="E-mail"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="seu@email.com"
-        />
-        <Input
-          label="Senha"
-          type="password"
-          value={senha}
-          onChange={(e) => setSenha(e.target.value)}
-          placeholder="••••••••"
-          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-        />
+        <form onSubmit={handleSubmit}>
+          <Input
+            id="email"
+            name="email"
+            label="E-mail"
+            type="email"
+            placeholder="seu@email.com"
+            required
+            disabled={loading}
+          />
+          <Input
+            id="senha"
+            name="senha"
+            label="Senha"
+            type="password"
+            placeholder="••••••••"
+            required
+            disabled={loading}
+          />
 
-        <Btn
-          variant="primary"
-          onClick={handleSubmit}
-          disabled={loading}
-          style={{ width: "100%", padding: "10px", marginTop: 4 }}
-        >
-          {loading ? "Entrando..." : "Entrar"}
-        </Btn>
+          <Btn
+            type="submit"
+            variant="primary"
+            disabled={loading}
+            style={{ width: "100%", padding: "10px", marginTop: 4 }}
+          >
+            {loading ? "Entrando..." : "Entrar"}
+          </Btn>
+        </form>
 
         <div style={{ marginTop: 16, fontSize: 11, color: "#aaa", textAlign: "center" }}>
           Problemas de acesso? Fale com o administrador.
@@ -110,3 +127,4 @@ export default function LoginPage() {
     </div>
   );
 }
+
