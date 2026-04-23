@@ -1,1132 +1,753 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "../../lib/supabase";
 import { useApp } from "../../context/AppContext";
 import { useAuditoria } from "../../hooks/useAuditoria";
-import { fmt, fmtMoeda, CATS_DEFAULT, periodoParaDatas, exportarCSV } from "../../lib/helpers";
-import { processarDocumentoIA } from "../../api/claude";
-import SeletorPeriodo from "../ui/SeletorPeriodo";
-import BotaoExportar from "../ui/BotaoExportar";
+import { fmt, fmtMoeda } from "../../lib/helpers";
 import {
   Btn, Input, SelectField, Modal, ConfirmModal,
-  MetricCard, AlertBar, Msg, PageHeader, Table, EmptyRow, Badge,
+  MetricCard, AlertBar, Msg, PageHeader, Table, EmptyRow,
 } from "../ui";
 
-const CONFIANCA_COLOR = { alta: "#E1F5EE", media: "#FAEEDA", baixa: "#FCEBEB" };
-const CONFIANCA_TEXT  = { alta: "#085041", media: "#633806", baixa: "#791F1F" };
+// ── Utilitários ────────────────────────────────────────────────
+const hoje = () => new Date().toISOString().split("T")[0];
+const mesAtual = () => {
+  const d = new Date();
+  return {
+    inicio: new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split("T")[0],
+    fim:    new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split("T")[0],
+  };
+};
 
-const CATS_DEMISSAO = [
-  "Demissao",
+// ── Categorização automática por palavras-chave ────────────────
+function categorizarTexto(descricao, regrasIA) {
+  if (!descricao) return null;
+  const texto = descricao.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  // Tenta regras aprendidas primeiro (maior prioridade)
+  for (const regra of regrasIA) {
+    if (texto.includes(regra.chave)) return regra.categoria_id;
+  }
+  return null;
+}
+
+// ── Cores dos gráficos por categoria ──────────────────────────
+const CORES = [
+  "#E74C3C","#E67E22","#F39C12","#1D9E75","#2980B9",
+  "#8E44AD","#16A085","#2C3E50","#C0392B","#27AE60",
+  "#D35400","#7F8C8D","#1ABC9C","#922B21","#F1C40F",
 ];
 
+// ── Componente gráfico de pizza simples (SVG) ─────────────────
+function GraficoPizza({ dados, titulo }) {
+  const total = dados.reduce((s, d) => s + d.valor, 0);
+  if (total === 0) return <div style={{ textAlign: "center", color: "#aaa", fontSize: 13, padding: "2rem" }}>Sem dados</div>;
+  let acumAngle = 0;
+  const slices = dados.map((d, i) => {
+    const pct = d.valor / total;
+    const start = acumAngle;
+    acumAngle += pct * 360;
+    return { ...d, pct, start, cor: CORES[i % CORES.length] };
+  });
+  function arc(cx, cy, r, startDeg, endDeg) {
+    const s = (startDeg * Math.PI) / 180;
+    const e = (endDeg   * Math.PI) / 180;
+    const x1 = cx + r * Math.cos(s - Math.PI / 2);
+    const y1 = cy + r * Math.sin(s - Math.PI / 2);
+    const x2 = cx + r * Math.cos(e - Math.PI / 2);
+    const y2 = cy + r * Math.sin(e - Math.PI / 2);
+    const large = endDeg - startDeg > 180 ? 1 : 0;
+    return `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`;
+  }
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>{titulo}</div>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <svg viewBox="0 0 120 120" width={120} height={120} style={{ flexShrink: 0 }}>
+          {slices.map((s, i) => (
+            <path key={i} d={arc(60, 60, 55, s.start, s.start + s.pct * 360)} fill={s.cor} stroke="#fff" strokeWidth="1" />
+          ))}
+        </svg>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {slices.map((s, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5, fontSize: 12 }}>
+              <div style={{ width: 10, height: 10, borderRadius: "50%", background: s.cor, flexShrink: 0 }} />
+              <span style={{ flex: 1, color: "#555", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.nome}</span>
+              <span style={{ fontWeight: 500, color: "#333" }}>{Math.round(s.pct * 100)}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Gráfico de barras simples ─────────────────────────────────
+function GraficoBarras({ dados, titulo, corPos = "#1D9E75", corNeg = "#E74C3C" }) {
+  const max = Math.max(...dados.map(d => Math.max(d.receitas || 0, d.despesas || 0)), 1);
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>{titulo}</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", height: 100, overflowX: "auto" }}>
+        {dados.map((d, i) => (
+          <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 40 }}>
+            <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: 80 }}>
+              {d.receitas !== undefined && (
+                <div style={{ width: 14, height: `${(d.receitas / max) * 80}px`, background: corPos, borderRadius: "3px 3px 0 0", minHeight: 2 }} title={fmtMoeda(d.receitas)} />
+              )}
+              {d.despesas !== undefined && (
+                <div style={{ width: 14, height: `${(d.despesas / max) * 80}px`, background: corNeg, borderRadius: "3px 3px 0 0", minHeight: 2 }} title={fmtMoeda(d.despesas)} />
+              )}
+            </div>
+            <span style={{ fontSize: 10, color: "#888", whiteSpace: "nowrap" }}>{d.label}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
+        <span style={{ fontSize: 11, color: "#555", display: "flex", alignItems: "center", gap: 4 }}>
+          <div style={{ width: 10, height: 10, background: corPos, borderRadius: 2 }} /> Receitas
+        </span>
+        <span style={{ fontSize: 11, color: "#555", display: "flex", alignItems: "center", gap: 4 }}>
+          <div style={{ width: 10, height: 10, background: corNeg, borderRadius: 2 }} /> Despesas
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// COMPONENTE PRINCIPAL
+// ═══════════════════════════════════════════════════════════════
 export default function Financeiro() {
   const { usuario } = useApp();
   const { log } = useAuditoria(usuario);
 
-  const periodoInicial = periodoParaDatas("mes_atual");
-  const [periodo, setPeriodo] = useState({ ...periodoInicial, periodo: "mes_atual" });
-  const [lancamentos, setLancamentos] = useState([]);
-  const [categorias, setCategorias] = useState([]);
-  const [regras, setRegras] = useState({});
-  const [catFiltro, setCatFiltro] = useState("");
-  const [tipoFiltro, setTipoFiltro] = useState("");
-  const [modal, setModal] = useState(null);
-  const [editLanc, setEditLanc] = useState(null);
-  const [form, setForm] = useState({ descricao: "", valor: "", tipo: "saida", categoria: "", subcategoria: "", data: new Date().toISOString().split("T")[0], observacao: "", isSaldoInicial: false });
+  // ── Estado global ─────────────────────────────────────────
+  const [aba, setAba] = useState("dashboard");
+  const [periodo, setPeriodo] = useState(mesAtual());
+  const [msg, setMsg]         = useState("");
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
   const [confirmData, setConfirmData] = useState(null);
-  const [aba, setAba] = useState("lancamentos");
-  const [uploadFile, setUploadFile] = useState(null);
-  const [uploadLoading, setUploadLoading] = useState(false);
-  const [uploadResultados, setUploadResultados] = useState([]);
-  const [uploadErro, setUploadErro] = useState("");
-  const [novaCat, setNovaCat] = useState("");
-  const [novaCatUpload, setNovaCatUpload] = useState("");
-  const [selecionados, setSelecionados] = useState([]);
-  const [saldoAnterior, setSaldoAnterior] = useState(0);
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= 640);
-  const [numAlunos, setNumAlunos] = useState(80);
-  const [horasDia, setHorasDia] = useState(8);
-  const [margemCalc, setMargemCalc] = useState(10);
-  const [catObjetos, setCatObjetos] = useState([]);
-  const [editCat, setEditCat] = useState(null); // { id, nome, nomeNovo }
-  const [saldoInicialAno, setSaldoInicialAno] = useState(null);
+
+  // ── Dados do banco ────────────────────────────────────────
+  const [receitas, setReceitas]       = useState([]);
+  const [despesas, setDespesas]       = useState([]);
+  const [categorias, setCategorias]   = useState([]);
+  const [contas, setContas]           = useState([]);
+  const [recorrencias, setRecorrencias] = useState([]);
+  const [regrasIA, setRegrasIA]       = useState([]);
+
+  // ── Formulários ───────────────────────────────────────────
+  const [modal, setModal]   = useState(null); // "receita"|"despesa"|"recorrencia"|"conta"
+  const [editItem, setEditItem] = useState(null);
+
+  const formRecDefault = { descricao: "", valor: "", data: hoje(), tipo: "mensalidade", conta_id: "", referencia: "", observacao: "" };
+  const formDespDefault = { descricao: "", valor: "", data: hoje(), tipo: "variavel", conta_id: "", categoria_id: "", observacao: "" };
+  const formRecorrDefault = { descricao: "", valor: "", dia_vencimento: 5, categoria_id: "", conta_id: "" };
+
+  const [formRec,  setFormRec]  = useState(formRecDefault);
+  const [formDesp, setFormDesp] = useState(formDespDefault);
+  const [formRecorr, setFormRecorr] = useState(formRecorrDefault);
+
+  // ── Calculadora ───────────────────────────────────────────
+  const [calc, setCalc] = useState({ alunos: 80, custos: 0, margem: 15, horas: 8, ocupacao: 100 });
 
   const showMsg = (m) => { setMsg(m); setTimeout(() => setMsg(""), 4000); };
 
-  const carregarLancamentos = useCallback(async () => {
-    const { data } = await supabase.from("financeiro").select("*")
-      .gte("data", periodo.inicio).lte("data", periodo.fim)
-      .order("data", { ascending: false });
-    setLancamentos(data || []);
-
-    // 1. Buscar o lançamento de saldo inicial (is_saldo_inicial = true)
-    //    Ele é o ponto de partida do caixa — não é entrada operacional
-    const { data: saldoInicialRows } = await supabase
-      .from("financeiro")
-      .select("valor")
-      .eq("is_saldo_inicial", true)
-      .limit(1);
-    const valorSaldoInicial = saldoInicialRows && saldoInicialRows.length > 0
-      ? Number(saldoInicialRows[0].valor)
-      : 0;
-    if (valorSaldoInicial > 0) setSaldoInicialAno(valorSaldoInicial);
-
-    // 2. Buscar lançamentos OPERACIONAIS anteriores ao período
-    //    (excluindo is_saldo_inicial e categoria "Saldo Inicial")
-    const { data: anterior } = await supabase
-      .from("financeiro")
-      .select("tipo, valor, is_saldo_inicial, categoria")
-      .lt("data", periodo.inicio);
-
-    let saldoAcum = valorSaldoInicial;
-    if (anterior && anterior.length > 0) {
-      saldoAcum = anterior.reduce((acc, l) => {
-        // Ignorar o próprio lançamento de saldo inicial (já está em valorSaldoInicial)
-        if (l.is_saldo_inicial || l.categoria === "Saldo Inicial" || l.tipo === "saldo_inicial") return acc;
-        if (l.tipo === "entrada") return acc + Number(l.valor);
-        if (l.tipo === "saida")   return acc - Number(l.valor);
-        return acc;
-      }, valorSaldoInicial);
-    }
-    setSaldoAnterior(saldoAcum);
+  // ── Carregar dados ────────────────────────────────────────
+  const carregar = useCallback(async () => {
+    const [
+      { data: recs },
+      { data: desps },
+      { data: cats },
+      { data: conts },
+      { data: recorrs },
+      { data: regras },
+    ] = await Promise.all([
+      supabase.from("fin_receitas").select("*, fin_categorias(nome,cor)").gte("data", periodo.inicio).lte("data", periodo.fim).order("data", { ascending: false }),
+      supabase.from("fin_despesas").select("*, fin_categorias(nome,cor)").gte("data", periodo.inicio).lte("data", periodo.fim).order("data", { ascending: false }),
+      supabase.from("fin_categorias").select("*").eq("ativo", true).order("nome"),
+      supabase.from("fin_contas").select("*").eq("ativo", true),
+      supabase.from("fin_recorrencias").select("*, fin_categorias(nome)").eq("ativo", true),
+      supabase.from("fin_regras_ia").select("*, fin_categorias(id,nome)").order("usos", { ascending: false }),
+    ]);
+    setReceitas(recs || []);
+    setDespesas(desps || []);
+    setCategorias(cats || []);
+    setContas(conts || []);
+    setRecorrencias(recorrs || []);
+    setRegrasIA((regras || []).map(r => ({ ...r, categoria_id: r.fin_categorias?.id })));
+    // Atualizar custos da calculadora com total de despesas do período
+    const totalDesp = (desps || []).reduce((s, d) => s + Number(d.valor), 0);
+    setCalc(c => ({ ...c, custos: totalDesp }));
   }, [periodo.inicio, periodo.fim]);
 
-  const carregarCategorias = useCallback(async () => {
-    const { data } = await supabase.from("financeiro_categorias").select("*").order("nome");
-    if (data && data.length > 0) {
-      setCategorias(data.map((c) => c.nome));
-      setCatObjetos(data);
-    } else {
-      // Primeira execução: migra as categorias default para o banco tornando-as editáveis
-      const rows = CATS_DEFAULT.map((nome) => ({ nome }));
-      const { data: ins } = await supabase.from("financeiro_categorias").insert(rows).select("*");
-      const objs = ins || rows.map((r, i) => ({ id: i, nome: r.nome }));
-      setCategorias(objs.map((c) => c.nome));
-      setCatObjetos(objs);
-    }
-  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
 
-  const carregarRegras = useCallback(async () => {
-    const { data } = await supabase.from("financeiro_regras").select("*");
-    if (data) { const r = {}; data.forEach((d) => { r[d.fornecedor_chave] = d.categoria; }); setRegras(r); }
-  }, []);
-
-  useEffect(() => { carregarLancamentos(); }, [carregarLancamentos]);
+  // Gerar recorrências ao abrir
   useEffect(() => {
-    const handle = () => setIsMobile(window.innerWidth <= 640);
-    window.addEventListener("resize", handle);
-    return () => window.removeEventListener("resize", handle);
+    supabase.rpc("gerar_recorrencias_mes").catch(() => {});
   }, []);
-  useEffect(() => { carregarCategorias(); carregarRegras(); }, [carregarCategorias, carregarRegras]);
 
-  // ── Cálculos ──────────────────────────────────
-  const lancFiltrados = lancamentos.filter((l) =>
-    (!catFiltro || l.categoria === catFiltro) && (!tipoFiltro || l.tipo === tipoFiltro)
-  );
-  // Saldo inicial: tipo neutro — não entra no DRE, mas compõe o saldo acumulado
-  const lancOperacionais = lancamentos.filter((l) => l.tipo !== "saldo_inicial" && !l.is_saldo_inicial && l.categoria !== "Saldo Inicial");
-  const valorSaldosIniciais = lancamentos
-    .filter((l) => l.tipo === "saldo_inicial" || l.is_saldo_inicial || l.categoria === "Saldo Inicial")
-    .reduce((s, l) => s + Number(l.valor), 0);
-  const totalEntradas = lancOperacionais.filter((l) => l.tipo === "entrada").reduce((s, l) => s + Number(l.valor), 0);
-  const totalSaidas   = lancOperacionais.filter((l) => l.tipo === "saida").reduce((s, l) => s + Number(l.valor), 0);
-  const saldo = totalEntradas - totalSaidas;
-  // saldoAcumulado: saldo anterior do período + operações do período + saldos iniciais (removido pois já está em saldoAnterior)
-  const saldoAcumulado = saldoAnterior + saldo;
-  const margem = totalEntradas > 0 ? Math.round((saldo / totalEntradas) * 100) : 0;
+  // ── Cálculos derivados ────────────────────────────────────
+  const totalReceitas = useMemo(() => receitas.filter(r => !r.is_saldo_inicial).reduce((s, r) => s + Number(r.valor), 0), [receitas]);
+  const totalDespesas = useMemo(() => despesas.reduce((s, d) => s + Number(d.valor), 0), [despesas]);
+  const saldoInicial  = useMemo(() => {
+    const si = receitas.find(r => r.is_saldo_inicial);
+    return si ? Number(si.valor) : 0;
+  }, [receitas]);
+  const resultado = totalReceitas - totalDespesas;
 
-  // Encargos de demissão separados
-  const totalDemissoes = lancOperacionais.filter((l) =>
-    l.tipo === "saida" && CATS_DEMISSAO.includes(l.categoria)
-  ).reduce((s, l) => s + Number(l.valor), 0);
+  const despPorCat = useMemo(() => {
+    const map = {};
+    despesas.forEach(d => {
+      const nome = d.fin_categorias?.nome || "Sem categoria";
+      map[nome] = (map[nome] || 0) + Number(d.valor);
+    });
+    return Object.entries(map).map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor);
+  }, [despesas]);
 
-  const porCategoriaSaida = categorias
-    .map((cat) => ({ cat, total: lancOperacionais.filter((l) => l.categoria === cat && l.tipo === "saida").reduce((s, l) => s + Number(l.valor), 0) }))
-    .filter((c) => c.total > 0).sort((a, b) => b.total - a.total);
+  // ── Calculadora de mensalidade ────────────────────────────
+  const calcResult = useMemo(() => {
+    const { alunos, custos, margem, horas, ocupacao } = calc;
+    const alunosEfetivos = alunos * (ocupacao / 100);
+    const custoAluno     = alunosEfetivos > 0 ? custos / alunosEfetivos : 0;
+    // Proporcional às horas (base: 8h = integral)
+    const fatorHora      = horas / 8;
+    const custoHora      = custoAluno * fatorHora;
+    const mensalidadeIdeal = custoHora * (1 + margem / 100);
+    const faturamentoNec   = mensalidadeIdeal * alunosEfetivos;
+    const lucroEstimado    = faturamentoNec - custos;
+    return { custoAluno: custoHora, mensalidadeIdeal, faturamentoNec, lucroEstimado };
+  }, [calc]);
 
-  const porCategoriaEntrada = Object.entries(
-    lancOperacionais.filter((l) => l.tipo === "entrada").reduce((acc, l) => { acc[l.categoria] = (acc[l.categoria] || 0) + Number(l.valor); return acc; }, {})
-  ).sort((a, b) => b[1] - a[1]);
-
-  const dreEntradas = lancOperacionais.filter((l) => l.tipo === "entrada").reduce((acc, l) => { acc[l.categoria] = (acc[l.categoria] || 0) + Number(l.valor); return acc; }, {});
-  const dreSaidas   = lancOperacionais.filter((l) => l.tipo === "saida").reduce((acc, l) => { acc[l.categoria] = (acc[l.categoria] || 0) + Number(l.valor); return acc; }, {});
-
-  // Dados para exportação
-  const dadosExportar = lancFiltrados.map((l) => ({
-    Data: l.data, Descricao: l.descricao, Categoria: l.categoria,
-    Subcategoria: l.subcategoria || "", Tipo: l.tipo,
-    Valor: Number(l.valor).toFixed(2).replace(".", ","),
-    "Lancado por": l.usuario_nome,
-  }));
-
-  // ── CRUD ──────────────────────────────────────
-  async function salvar() {
-    if (!form.descricao || !form.valor) return;
+  // ── Salvar receita ────────────────────────────────────────
+  async function salvarReceita() {
+    const { descricao, valor, data, tipo, conta_id, referencia, observacao } = formRec;
+    if (!descricao || !valor || !data) return showMsg("Preencha os campos obrigatórios.");
+    if (Number(valor) <= 0) return showMsg("Valor deve ser positivo.");
     setLoading(true);
-    // Saldo inicial: tipo neutro — não é entrada nem saída, não entra no DRE
-    const isSaldo = form.isSaldoInicial;
-    const cat = isSaldo ? "Saldo Inicial" : (form.categoria || categorias[0] || "Outros");
-    // Tipo "saldo_inicial" é tratado como neutro — não soma em entradas nem saídas
-    const tipo = isSaldo ? "saldo_inicial" : form.tipo;
-    const descricao = isSaldo ? "Saldo inicial" : form.descricao;
-    const observacao = isSaldo
-      ? "Ponto de partida do caixa — não contabilizado no DRE"
-      : (form.observacao || null);
-    const { isSaldoInicial: _drop, ...formSemFlag } = form;
+    // Auto-categorizar
+    const catId = categorizarTexto(descricao, regrasIA) ||
+      categorias.find(c => c.tipo === "receita")?.id;
     const payload = {
-      ...formSemFlag,
-      descricao,
-      categoria: cat,
-      tipo,
-      observacao,
-      valor: parseFloat(form.valor),
-      subcategoria: isSaldo ? null : (form.subcategoria || null),
-      is_saldo_inicial: isSaldo,
+      descricao, valor: parseFloat(valor), data,
+      tipo, conta_id: conta_id || null,
+      categoria_id: catId || null,
+      referencia: referencia || null,
+      observacao: observacao || null,
+      usuario_id: usuario.id, usuario_nome: usuario.nome,
     };
-    if (editLanc) {
-      await supabase.from("financeiro").update(payload).eq("id", editLanc.id);
-      await log("financeiro", "UPDATE", editLanc.id, `Editou lancamento "${descricao}"`, editLanc, form);
+    if (editItem) {
+      const { error } = await supabase.from("fin_receitas").update(payload).eq("id", editItem.id);
+      if (error) { showMsg("Erro: " + (error.code === "23505" ? "Receita duplicada!" : error.message)); setLoading(false); return; }
+      await log("fin_receitas", "UPDATE", editItem.id, `Editou receita "${descricao}"`, editItem, payload);
     } else {
-      const { data } = await supabase.from("financeiro").insert({ ...payload, usuario_id: usuario.id, usuario_nome: usuario.nome }).select().single();
-      await log("financeiro", "INSERT", data?.id, `Lancou ${tipo} "${descricao}" - ${fmtMoeda(form.valor)}`, null, form);
+      const { error } = await supabase.from("fin_receitas").insert(payload);
+      if (error) { showMsg("Erro: " + (error.code === "23505" ? "Receita duplicada!" : error.message)); setLoading(false); return; }
+      // Aprender regra
+      await aprenderRegra(descricao, catId);
+      await log("fin_receitas", "INSERT", null, `Lançou receita "${descricao}" — ${fmtMoeda(valor)}`, null, payload);
     }
-    setModal(null); setLoading(false); carregarLancamentos();
-    showMsg(isSaldo ? "Saldo inicial registrado!" : "Lancamento salvo!");
+    setModal(null); setLoading(false); carregar();
+    showMsg(editItem ? "Receita atualizada!" : "Receita lançada!");
   }
 
-  async function excluir(l) {
+  // ── Salvar despesa ────────────────────────────────────────
+  async function salvarDespesa() {
+    const { descricao, valor, data, tipo, conta_id, categoria_id, observacao } = formDesp;
+    if (!descricao || !valor || !data) return showMsg("Preencha os campos obrigatórios.");
+    if (Number(valor) <= 0) return showMsg("Valor deve ser positivo.");
+    setLoading(true);
+    // Auto-categorizar se não selecionou
+    const catId = categoria_id || categorizarTexto(descricao, regrasIA) ||
+      categorias.find(c => c.tipo === "despesa")?.id;
+    const payload = {
+      descricao, valor: parseFloat(valor), data,
+      tipo, conta_id: conta_id || null,
+      categoria_id: catId || null,
+      observacao: observacao || null,
+      usuario_id: usuario.id, usuario_nome: usuario.nome,
+    };
+    if (editItem) {
+      const { error } = await supabase.from("fin_despesas").update(payload).eq("id", editItem.id);
+      if (error) { showMsg("Erro: " + (error.code === "23505" ? "Despesa duplicada!" : error.message)); setLoading(false); return; }
+    } else {
+      const { error } = await supabase.from("fin_despesas").insert(payload);
+      if (error) { showMsg("Erro: " + (error.code === "23505" ? "Despesa duplicada!" : error.message)); setLoading(false); return; }
+      await aprenderRegra(descricao, catId);
+    }
+    await log("fin_despesas", editItem ? "UPDATE" : "INSERT", editItem?.id || null, `${editItem ? "Editou" : "Lançou"} despesa "${descricao}"`, editItem, payload);
+    setModal(null); setLoading(false); carregar();
+    showMsg(editItem ? "Despesa atualizada!" : "Despesa lançada!");
+  }
+
+  // ── Aprender regra de categorização ──────────────────────
+  async function aprenderRegra(descricao, catId) {
+    if (!catId || !descricao) return;
+    const palavras = descricao.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").split(/\s+/).filter(p => p.length >= 4);
+    for (const palavra of palavras.slice(0, 3)) {
+      await supabase.from("fin_regras_ia").upsert(
+        { chave: palavra, categoria_id: catId, usos: 1 },
+        { onConflict: "chave", ignoreDuplicates: false }
+      ).then(() => {
+        supabase.from("fin_regras_ia").update({ usos: supabase.rpc("coalesce", {}) }).eq("chave", palavra);
+      }).catch(() => {});
+    }
+  }
+
+  // ── Excluir ───────────────────────────────────────────────
+  async function excluir(tabela, item) {
     setConfirmData(null);
-    await supabase.from("financeiro").delete().eq("id", l.id);
-    await log("financeiro", "DELETE", l.id, `Excluiu lancamento "${l.descricao}"`, l, null);
-    carregarLancamentos(); showMsg("Lancamento excluido.");
+    await supabase.from(tabela).delete().eq("id", item.id);
+    await log(tabela, "DELETE", item.id, `Excluiu "${item.descricao}"`, item, null);
+    carregar(); showMsg("Excluído.");
   }
 
-  // ── Upload IA ──────────────────────────────────
-  async function processarArquivo() {
-    if (!uploadFile) return;
-    setUploadLoading(true); setUploadErro(""); setUploadResultados([]);
-    try {
-      const resultado = await processarDocumentoIA(uploadFile, categorias, regras);
-      const items = resultado.lancamentos || [];
-      if (items.length === 0) {
-        setUploadErro("Nenhum lancamento encontrado no documento.");
-      } else {
-        setUploadResultados(items);
-      }
-    } catch (e) {
-      setUploadErro("Erro ao processar: " + e.message);
-    } finally {
-      setUploadLoading(false);
-    }
+  // ── Salvar recorrência ────────────────────────────────────
+  async function salvarRecorrencia() {
+    if (!formRecorr.descricao || !formRecorr.valor) return;
+    await supabase.from("fin_recorrencias").insert({
+      ...formRecorr, valor: parseFloat(formRecorr.valor),
+    });
+    setModal(null); carregar(); showMsg("Recorrência criada!");
   }
 
-  // Detecta se um lançamento é pagamento de fatura de cartão de crédito
-  // IMPORTANTE: quando importando extrato bancário, o pagamento da fatura É uma saída real de caixa.
-  // O extrato bancário não mostra compras individuais — só o pagamento da fatura.
-  // Esta função NÃO é usada para ignorar faturas; é usada apenas para categorizá-las corretamente.
-  function ehPagamentoFaturaCartao(descricao) {
-    const d = (descricao || "").toUpperCase();
-    if (
-      d.includes("PAGTO CARTAO") || d.includes("PAGAMENTO CARTAO") ||
-      d.includes("PAG CARTAO") || d.includes("PAGTO FAT") ||
-      d.includes("PAGAMENTO FATURA") || d.includes("PAG FATURA") ||
-      d.includes("FATURA CARTAO") || d.includes("PAGAMENTO DE CARTAO") ||
-      (d.includes("CARTAO") && d.includes("CREDITO") && d.includes("PAG"))
-    ) return true;
-    if (
-      (d.includes("DEB.CONV.DEM") && (d.includes("MASTERCARD") || d.includes("VISA") || d.includes("ELO") || d.includes("AMEX"))) ||
-      (d.includes("DEB.PGT.TIT") && d.includes("CARTAO")) ||
-      (d.includes("PGTO.BOLETO") && d.includes("CARTAO"))
-    ) return true;
-    return false;
+  // ── Helpers de período ────────────────────────────────────
+  function mudarMes(delta) {
+    const d = new Date(periodo.inicio + "T12:00:00");
+    d.setMonth(d.getMonth() + delta);
+    setPeriodo({
+      inicio: new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split("T")[0],
+      fim:    new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split("T")[0],
+    });
   }
 
-  async function confirmarLancamentos() {
-    setLoading(true);
-    let importados = 0;
-    let duplicados = 0;
-    for (const l of uploadResultados) {
-      if (l._ignorar) continue;
-      // Verificar duplicata por data + valor + tipo + descricao
-      const { data: existe } = await supabase.from("financeiro")
-        .select("id").eq("data", l.data).eq("valor", l.valor).eq("tipo", l.tipo).eq("descricao", l.descricao).limit(1);
-      if (existe && existe.length > 0) { duplicados++; continue; }
-      await supabase.from("financeiro").insert({
-        descricao: l.descricao, valor: l.valor, tipo: l.tipo,
-        categoria: l.categoria_sugerida, subcategoria: l.subcategoria_sugerida || null,
-        data: l.data, observacao: `Importado via IA - ${uploadFile.name}`,
-        usuario_id: usuario.id, usuario_nome: usuario.nome,
-      });
-      importados++;
-      if (l.fornecedor_chave && l.categoria_sugerida) {
-        await supabase.from("financeiro_regras").upsert(
-          { fornecedor_chave: l.fornecedor_chave, categoria: l.categoria_sugerida },
-          { onConflict: "fornecedor_chave" }
-        );
-      }
-    }
-    await log("financeiro", "INSERT", null, `Importou ${importados} lancamentos via IA de "${uploadFile.name}" (${duplicados} duplicados ignorados)`, null, null);
-    setUploadResultados([]); setUploadFile(null); setModal(null);
-    setLoading(false); carregarLancamentos(); carregarRegras();
-    let msgFinal = `${importados} lancamentos importados com sucesso!`;
-    if (duplicados > 0) msgFinal += ` ${duplicados} duplicados ignorados.`;
-    showMsg(msgFinal);
-  }
+  const labelPeriodo = new Date(periodo.inicio + "T12:00:00").toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 
-  async function excluirSelecionados() {
-    const total = selecionados.length;
-    setLoading(true);
-    // Deletar todos de uma vez com .in()
-    await supabase.from("financeiro").delete().in("id", selecionados);
-    await log("financeiro", "DELETE", null, `Excluiu ${total} lancamentos em lote`, null, null);
-    setSelecionados([]);
-    setLoading(false);
-    carregarLancamentos();
-    showMsg(`${total} lancamentos excluidos!`);
-  }
+  // ── Sub-abas ──────────────────────────────────────────────
+  const abas = [
+    { key: "dashboard",    label: "Dashboard"     },
+    { key: "receitas",     label: "Receitas"      },
+    { key: "despesas",     label: "Despesas"      },
+    { key: "calculadora",  label: "Calculadora"   },
+    { key: "recorrencias", label: "Recorrências"  },
+    { key: "contas",       label: "Contas"        },
+  ];
 
-  function toggleSelecionado(id) {
-    setSelecionados(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  }
-
-  function toggleTodos() {
-    if (selecionados.length === lancFiltrados.length) {
-      setSelecionados([]);
-    } else {
-      setSelecionados(lancFiltrados.map(l => l.id));
-    }
-  }
-
-  async function adicionarCategoriaUpload() {
-    if (!novaCatUpload.trim()) return;
-    await supabase.from("financeiro_categorias").insert({ nome: novaCatUpload.trim() });
-    setNovaCatUpload(""); carregarCategorias();
-  }
-
-  async function removerCategoriaUpload(nome) {
-    await supabase.from("financeiro_categorias").delete().eq("nome", nome);
-    carregarCategorias();
-  }
-
-  async function adicionarCategoria() {
-    if (!novaCat.trim()) return;
-    await supabase.from("financeiro_categorias").insert({ nome: novaCat.trim() });
-    setNovaCat(""); carregarCategorias();
-  }
-
-  async function removerCategoria(nome) {
-    // Permite remover qualquer categoria, inclusive nativas
-    await supabase.from("financeiro_categorias").delete().eq("nome", nome);
-    carregarCategorias();
-  }
-
-  async function renomearCategoria(id, nomeAntigo, nomeNovo) {
-    if (!nomeNovo.trim() || nomeNovo.trim() === nomeAntigo) { setEditCat(null); return; }
-    // Atualiza a categoria no banco
-    await supabase.from("financeiro_categorias").update({ nome: nomeNovo.trim() }).eq("id", id);
-    // Atualiza todos os lançamentos que usavam o nome antigo
-    await supabase.from("financeiro").update({ categoria: nomeNovo.trim() }).eq("categoria", nomeAntigo);
-    setEditCat(null);
-    carregarCategorias();
-    showMsg("Categoria renomeada e lançamentos atualizados!");
-  }
+  const S = { // estilos reutilizáveis
+    card: { background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, padding: "1.25rem" },
+    grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
+    label: { fontSize: 11, color: "#888", marginBottom: 2 },
+    val: { fontSize: 20, fontWeight: 600 },
+  };
 
   return (
-    <div style={{ padding: "clamp(0.75rem, 3vw, 1.5rem)", maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: "clamp(0.75rem,3vw,1.5rem)", maxWidth: 1200, margin: "0 auto" }}>
       {confirmData && <ConfirmModal {...confirmData} onCancel={() => setConfirmData(null)} />}
 
-      <PageHeader title="Financeiro" subtitle="Fluxo de caixa, DRE e dashboard">
-        <BotaoExportar dados={dadosExportar} nomeArquivo="financeiro" />
-        <Btn variant="info" onClick={() => setModal("categorias")}>Categorias</Btn>
-        <Btn onClick={() => setModal("upload")}>Subir documento</Btn>
-        <Btn variant="primary" onClick={() => {
-          setForm({ descricao: "", valor: "", tipo: "saida", categoria: categorias[0] || "", subcategoria: "", data: new Date().toISOString().split("T")[0], observacao: "", isSaldoInicial: false });
-          setEditLanc(null); setModal("form");
-        }}>+ Lancamento</Btn>
+      <PageHeader title="Financeiro" subtitle="Controle completo de receitas e despesas">
+        <button onClick={() => mudarMes(-1)} style={{ padding: "6px 10px", border: "0.5px solid #ccc", borderRadius: 7, background: "#fff", cursor: "pointer", fontSize: 13 }}>‹</button>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "#333", textTransform: "capitalize", minWidth: 140, textAlign: "center" }}>{labelPeriodo}</span>
+        <button onClick={() => mudarMes(1)} style={{ padding: "6px 10px", border: "0.5px solid #ccc", borderRadius: 7, background: "#fff", cursor: "pointer", fontSize: 13 }}>›</button>
+        <Btn variant="primary" onClick={() => { setFormRec(formRecDefault); setEditItem(null); setModal("receita"); }}>+ Receita</Btn>
+        <Btn variant="danger" onClick={() => { setFormDesp(formDespDefault); setEditItem(null); setModal("despesa"); }}>+ Despesa</Btn>
       </PageHeader>
-
-      {/* Sub-abas + seletor de período */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 20, borderBottom: "0.5px solid #e0e0e0", paddingBottom: 12, flexWrap: "wrap" }}>
-        {[["lancamentos","Lancamentos"],["dre","DRE"],["dashboard","Dashboard"],["demissoes","Custo/Aluno"],["regras","Regras IA"]].map(([k,l]) => (
-          <button key={k} onClick={() => setAba(k)}
-            style={{ padding: "6px 16px", borderRadius: 7, border: "none", cursor: "pointer", fontSize: 13,
-              background: aba === k ? "#1D9E75" : "transparent",
-              color: aba === k ? "#fff" : "#555", fontWeight: aba === k ? 500 : 400 }}>{l}</button>
-        ))}
-        <div style={{ marginLeft: "auto" }}>
-          <SeletorPeriodo onChange={setPeriodo} />
-        </div>
-      </div>
 
       <Msg text={msg} />
 
-      {/* Card Período Total */}
-      <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, padding: "1rem", marginBottom: 20 }}>
-        <div style={{ fontSize: 12, color: "#888", marginBottom: 8, fontWeight: 500 }}>PERÍODO TOTAL</div>
-        <div style={{ fontSize: 16, fontWeight: 600, color: "#085041" }}>{fmt(periodo.inicio)} até {fmt(periodo.fim)}</div>
-        <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>Saldo inicial: {fmtMoeda(saldoAnterior)} | Saldo final: {fmtMoeda(saldoAnterior + saldo)}</div>
+      {/* Sub-abas */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "0.5px solid #e0e0e0", paddingBottom: 10, flexWrap: "wrap" }}>
+        {abas.map(a => (
+          <button key={a.key} onClick={() => setAba(a.key)} style={{
+            padding: "6px 14px", borderRadius: 7, border: "none", cursor: "pointer", fontSize: 13,
+            background: aba === a.key ? "#1D9E75" : "transparent",
+            color: aba === a.key ? "#fff" : "#555", fontWeight: aba === a.key ? 500 : 400,
+          }}>{a.label}</button>
+        ))}
       </div>
 
-      {/* Cards de Período e Saldos */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 8, marginBottom: 20 }}>
-        <MetricCard label="Saldo Inicial" value={fmtMoeda(saldoAnterior)} subColor="#888" sub="período" accent="#f7f7f5" />
-        <MetricCard label="Saldo Final" value={fmtMoeda(saldoAnterior + saldo)} subColor={saldoAnterior + saldo >= 0 ? "#1D9E75" : "#A32D2D"} sub="acumulado" accent={saldoAnterior + saldo >= 0 ? "#E1F5EE" : "#FCEBEB"} />
-      </div>
-
-      {/* KPIs sempre visíveis */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 8, marginBottom: 20 }}>
-        <MetricCard label="Receita total" value={fmtMoeda(totalEntradas)} subColor="#1D9E75" sub="entradas" accent="#E1F5EE" />
-        <MetricCard label="Despesa total" value={fmtMoeda(totalSaidas)} subColor="#A32D2D" sub="saidas" accent="#FCEBEB" />
-        <MetricCard label="Resultado" value={fmtMoeda(saldo)} subColor={saldo >= 0 ? "#1D9E75" : "#A32D2D"} sub={saldo >= 0 ? "superavit" : "deficit"} />
-        <MetricCard label="Saldo acumulado" value={fmtMoeda(saldoAcumulado)} subColor={saldoAcumulado >= 0 ? "#1D9E75" : "#A32D2D"} sub="saldo geral" accent={saldoAcumulado >= 0 ? "#E1F5EE" : "#FCEBEB"} />
-        <MetricCard label="Margem" value={`${margem}%`} subColor={margem >= 0 ? "#1D9E75" : "#A32D2D"} sub="de resultado" />
-        <MetricCard label="Demissoes" value={fmtMoeda(totalDemissoes)} subColor="#A32D2D" sub="encargos trabalhistas" accent="#FFF5F5" />
-      </div>
-
-      {/* ── LANCAMENTOS ── */}
-      {aba === "lancamentos" && (
-        <>
-          {/* Filtros + barra de ações em lote */}
-          <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-            <select value={tipoFiltro} onChange={(e) => setTipoFiltro(e.target.value)}
-              style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #e0e0e0", fontSize: 13, fontFamily: "inherit", background: "#fff", color: tipoFiltro ? "#085041" : "#555", fontWeight: tipoFiltro ? 500 : 400, cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", minWidth: 140 }}>
-              <option value="">Todos os tipos</option>
-              <option value="entrada">Entradas</option>
-              <option value="saida">Saidas</option>
-              <option value="saldo_inicial">Saldo inicial</option>
-            </select>
-            <select value={catFiltro} onChange={(e) => setCatFiltro(e.target.value)}
-              style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #e0e0e0", fontSize: 13, fontFamily: "inherit", background: "#fff", color: catFiltro ? "#085041" : "#555", fontWeight: catFiltro ? 500 : 400, cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", minWidth: 180 }}>
-              <option value="">Todas as categorias</option>
-              {categorias.map((c) => <option key={c}>{c}</option>)}
-            </select>
-            {(tipoFiltro || catFiltro) && (
-              <button onClick={() => { setTipoFiltro(""); setCatFiltro(""); }}
-                style={{ padding: "7px 12px", borderRadius: 8, border: "1px solid #e0e0e0", background: "#fff", fontSize: 12, color: "#888", cursor: "pointer", fontFamily: "inherit" }}>
-                ✕ Limpar filtros
-              </button>
-            )}
-            {selecionados.length > 0 && (
-              <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", background: "#FCEBEB", padding: "6px 14px", borderRadius: 8 }}>
-                <span style={{ fontSize: 12, color: "#791F1F", fontWeight: 500 }}>{selecionados.length} selecionado(s)</span>
-                <Btn small variant="danger" onClick={() => setConfirmData({
-                  title: "Excluir selecionados",
-                  message: `Excluir ${selecionados.length} lancamento(s) selecionados?`,
-                  onConfirm: excluirSelecionados
-                })}>Excluir todos</Btn>
-                <button onClick={() => setSelecionados([])}
-                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#A32D2D", padding: 0 }}>✕</button>
-              </div>
-            )}
-          </div>
-
-          {/* Desktop: tabela */}
-          {!isMobile && <div>
-            <Table headers={["", "Data","Descricao","Categoria","Tipo","Valor","Por",""]}>
-              <tr style={{ background: "#f7f7f5" }}>
-                <td style={{ padding: "8px 14px" }}>
-                  <input type="checkbox"
-                    checked={lancFiltrados.length > 0 && selecionados.length === lancFiltrados.length}
-                    onChange={toggleTodos}
-                    style={{ width: 15, height: 15, accentColor: "#1D9E75", cursor: "pointer" }} />
-                </td>
-                <td colSpan={7} style={{ padding: "8px 14px", fontSize: 11, color: "#888" }}>
-                  {selecionados.length === 0 ? "Selecionar todos" : `${selecionados.length} de ${lancFiltrados.length} selecionados`}
-                </td>
-              </tr>
-              {lancFiltrados.map((l) => (
-                <tr key={l.id} style={{ borderBottom: "0.5px solid #f0f0f0", background: selecionados.includes(l.id) ? "#F0FAF6" : "transparent" }}>
-                  <td style={{ padding: "10px 14px" }}>
-                    <input type="checkbox" checked={selecionados.includes(l.id)} onChange={() => toggleSelecionado(l.id)}
-                      style={{ width: 15, height: 15, accentColor: "#1D9E75", cursor: "pointer" }} />
-                  </td>
-                  <td style={{ padding: "10px 14px", fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{fmt(l.data)}</td>
-                  <td style={{ padding: "10px 14px", fontSize: 13 }}>
-                    <span style={{ fontWeight: 500 }}>{l.descricao}</span>
-                    {l.observacao && <div style={{ fontSize: 11, color: "#aaa" }}>{l.observacao}</div>}
-                  </td>
-                  <td style={{ padding: "10px 14px", fontSize: 12, color: "#555" }}>
-                    {l.categoria}
-                    {l.subcategoria && <div style={{ fontSize: 11, color: "#aaa" }}>↳ {l.subcategoria}</div>}
-                  </td>
-                  <td style={{ padding: "10px 14px" }}>
-                    <span style={{ padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 500,
-                      background: l.tipo === "saldo_inicial" ? "#F5F0FF" : l.tipo === "entrada" ? "#EAF3DE" : "#FCEBEB",
-                      color: l.tipo === "saldo_inicial" ? "#5B3CBF" : l.tipo === "entrada" ? "#27500A" : "#791F1F" }}>
-                      {l.tipo === "saldo_inicial" ? "saldo" : l.tipo}</span>
-                  </td>
-                  <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 500,
-                    color: l.tipo === "saldo_inicial" ? "#5B3CBF" : l.tipo === "entrada" ? "#1D9E75" : "#A32D2D" }}>
-                    {l.tipo === "saldo_inicial" ? "" : l.tipo === "entrada" ? "+" : "-"}{fmtMoeda(l.valor)}
-                  </td>
-                  <td style={{ padding: "10px 14px", fontSize: 12, color: "#888" }}>{l.usuario_nome}</td>
-                  <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
-                    <Btn small onClick={() => { setForm({ ...l, valor: String(l.valor) }); setEditLanc(l); setModal("form"); }} style={{ marginRight: 4 }}>Editar</Btn>
-                    <Btn small variant="danger" onClick={() => setConfirmData({ title: "Excluir lancamento", message: `Excluir "${l.descricao}"?`, onConfirm: () => excluir(l) })}>Excluir</Btn>
-                  </td>
-                </tr>
-              ))}
-              {lancFiltrados.length === 0 && <EmptyRow colSpan={8} message="Nenhum lancamento encontrado." />}
-            </Table>
-          </div>}
-
-          {/* Mobile: cards com checkbox */}
-          {isMobile && <div>
-            {lancFiltrados.length > 0 && (
-              <div style={{ padding: "10px 14px", borderBottom: "0.5px solid #f0f0f0", display: "flex", alignItems: "center", gap: 10, background: "#f7f7f5" }}>
-                <input type="checkbox"
-                  checked={selecionados.length === lancFiltrados.length}
-                  onChange={toggleTodos}
-                  style={{ width: 16, height: 16, accentColor: "#1D9E75" }} />
-                <span style={{ fontSize: 12, color: "#888" }}>Selecionar todos ({lancFiltrados.length})</span>
-              </div>
-            )}
-            {lancFiltrados.length === 0 && <div style={{ padding: "2rem", textAlign: "center", color: "#aaa", fontSize: 13 }}>Nenhum lancamento encontrado.</div>}
-            {lancFiltrados.map((l) => (
-              <div key={l.id} style={{ padding: "12px 14px", borderBottom: "0.5px solid #f0f0f0", background: selecionados.includes(l.id) ? "#F0FAF6" : "transparent" }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 4 }}>
-                  <input type="checkbox" checked={selecionados.includes(l.id)} onChange={() => toggleSelecionado(l.id)}
-                    style={{ width: 16, height: 16, accentColor: "#1D9E75", marginTop: 2, flexShrink: 0 }} />
-                  <span style={{ fontSize: 13, fontWeight: 500, flex: 1 }}>{l.descricao}</span>
-                  <span style={{ fontSize: 14, fontWeight: 600,
-                    color: l.tipo === "saldo_inicial" ? "#5B3CBF" : l.tipo === "entrada" ? "#1D9E75" : "#A32D2D",
-                    whiteSpace: "nowrap" }}>
-                    {l.tipo === "saldo_inicial" ? "" : l.tipo === "entrada" ? "+" : "-"}{fmtMoeda(l.valor)}
-                  </span>
-                </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", paddingLeft: 26 }}>
-                  <span style={{ fontSize: 11, color: "#888" }}>{fmt(l.data)}</span>
-                  <span style={{ fontSize: 11, color: "#555", background: "#f5f5f3", padding: "1px 7px", borderRadius: 10 }}>{l.categoria}</span>
-                  <span style={{ padding: "1px 8px", borderRadius: 20, fontSize: 10, fontWeight: 500,
-                    background: l.tipo === "saldo_inicial" ? "#F5F0FF" : l.tipo === "entrada" ? "#EAF3DE" : "#FCEBEB",
-                    color: l.tipo === "saldo_inicial" ? "#5B3CBF" : l.tipo === "entrada" ? "#27500A" : "#791F1F" }}>
-                    {l.tipo === "saldo_inicial" ? "saldo" : l.tipo}</span>
-                </div>
-                <div style={{ display: "flex", gap: 6, marginTop: 8, paddingLeft: 26 }}>
-                  <Btn small onClick={() => { setForm({ ...l, valor: String(l.valor) }); setEditLanc(l); setModal("form"); }}>Editar</Btn>
-                  <Btn small variant="danger" onClick={() => setConfirmData({ title: "Excluir lancamento", message: `Excluir "${l.descricao}"?`, onConfirm: () => excluir(l) })}>Excluir</Btn>
-                </div>
-              </div>
-            ))}
-          </div>}
-        </>
-      )}
-
-      {/* ── DRE ── */}
-      {aba === "dre" && (
-        <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ padding: "16px 20px", borderBottom: "0.5px solid #e0e0e0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 14, fontWeight: 500 }}>Demonstrativo de Resultado</span>
-            <BotaoExportar dados={[
-              ...Object.entries(dreEntradas).map(([cat,val]) => ({ Tipo:"Receita", Categoria:cat, Valor:Number(val).toFixed(2).replace(".",",") })),
-              ...Object.entries(dreSaidas).map(([cat,val]) => ({ Tipo:"Despesa", Categoria:cat, Valor:Number(val).toFixed(2).replace(".",",") })),
-              { Tipo:"RESULTADO", Categoria:"", Valor:Number(saldo).toFixed(2).replace(".",",") },
-            ]} nomeArquivo="dre" label="Exportar DRE" />
-          </div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr style={{ background: "#f7f7f5" }}>
-              <th style={{ padding: "10px 20px", fontSize: 12, fontWeight: 500, color: "#777", textAlign: "left", borderBottom: "0.5px solid #e0e0e0" }}>Descricao</th>
-              <th style={{ padding: "10px 20px", fontSize: 12, fontWeight: 500, color: "#777", textAlign: "right", borderBottom: "0.5px solid #e0e0e0" }}>Valor</th>
-            </tr></thead>
-            <tbody>
-              <tr><td colSpan={2} style={{ padding: "10px 20px", fontSize: 12, fontWeight: 500, color: "#1D9E75", background: "#f0faf5", borderBottom: "0.5px solid #e0e0e0" }}>RECEITAS</td></tr>
-              {Object.entries(dreEntradas).map(([cat,val]) => (
-                <tr key={cat} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
-                  <td style={{ padding: "9px 20px 9px 32px", fontSize: 13, color: "#555" }}>{cat}</td>
-                  <td style={{ padding: "9px 20px", fontSize: 13, textAlign: "right", color: "#1D9E75", fontWeight: 500 }}>{fmtMoeda(val)}</td>
-                </tr>
-              ))}
-              {Object.keys(dreEntradas).length === 0 && <tr><td colSpan={2} style={{ padding: "9px 20px 9px 32px", fontSize: 13, color: "#aaa" }}>Sem receitas no periodo</td></tr>}
-              <tr style={{ background: "#f0faf5" }}>
-                <td style={{ padding: "10px 20px", fontSize: 13, fontWeight: 500, borderTop: "0.5px solid #e0e0e0" }}>Total Receitas</td>
-                <td style={{ padding: "10px 20px", fontSize: 13, fontWeight: 500, textAlign: "right", color: "#1D9E75", borderTop: "0.5px solid #e0e0e0" }}>{fmtMoeda(totalEntradas)}</td>
-              </tr>
-              <tr><td colSpan={2} style={{ padding: "10px 20px", fontSize: 12, fontWeight: 500, color: "#A32D2D", background: "#fff5f5", borderBottom: "0.5px solid #e0e0e0", borderTop: "0.5px solid #e0e0e0" }}>DESPESAS</td></tr>
-              {Object.entries(dreSaidas).map(([cat,val]) => (
-                <tr key={cat} style={{ borderBottom: "0.5px solid #f0f0f0", background: CATS_DEMISSAO.includes(cat) ? "#fff8f8" : "transparent" }}>
-                  <td style={{ padding: "9px 20px 9px 32px", fontSize: 13, color: "#555" }}>
-                    {cat}{CATS_DEMISSAO.includes(cat) && <span style={{ fontSize: 10, color: "#A32D2D", marginLeft: 6, background: "#FCEBEB", padding: "1px 6px", borderRadius: 10 }}>demissao</span>}
-                  </td>
-                  <td style={{ padding: "9px 20px", fontSize: 13, textAlign: "right", color: "#A32D2D", fontWeight: 500 }}>{fmtMoeda(val)}</td>
-                </tr>
-              ))}
-              {Object.keys(dreSaidas).length === 0 && <tr><td colSpan={2} style={{ padding: "9px 20px 9px 32px", fontSize: 13, color: "#aaa" }}>Sem despesas no periodo</td></tr>}
-              <tr style={{ background: "#fff5f5" }}>
-                <td style={{ padding: "10px 20px", fontSize: 13, fontWeight: 500, borderTop: "0.5px solid #e0e0e0" }}>Total Despesas</td>
-                <td style={{ padding: "10px 20px", fontSize: 13, fontWeight: 500, textAlign: "right", color: "#A32D2D", borderTop: "0.5px solid #e0e0e0" }}>{fmtMoeda(totalSaidas)}</td>
-              </tr>
-              <tr style={{ background: saldo >= 0 ? "#f0faf5" : "#fff5f5" }}>
-                <td style={{ padding: "12px 20px", fontSize: 14, fontWeight: 500, borderTop: "2px solid #e0e0e0" }}>RESULTADO DO PERIODO</td>
-                <td style={{ padding: "12px 20px", fontSize: 14, fontWeight: 500, textAlign: "right", color: saldo >= 0 ? "#1D9E75" : "#A32D2D", borderTop: "2px solid #e0e0e0" }}>{fmtMoeda(saldo)}</td>
-              </tr>
-              <tr>
-                <td style={{ padding: "10px 20px", fontSize: 13, color: "#888" }}>Margem de resultado</td>
-                <td style={{ padding: "10px 20px", fontSize: 13, textAlign: "right", fontWeight: 500, color: margem >= 0 ? "#1D9E75" : "#A32D2D" }}>{margem}%</td>
-              </tr>
-              {totalDemissoes > 0 && (
-                <tr style={{ background: "#FFF5F5" }}>
-                  <td style={{ padding: "10px 20px", fontSize: 13, color: "#A32D2D", fontWeight: 500 }}>Total encargos de demissao</td>
-                  <td style={{ padding: "10px 20px", fontSize: 13, textAlign: "right", fontWeight: 500, color: "#A32D2D" }}>{fmtMoeda(totalDemissoes)}</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* ── DASHBOARD ── */}
+      {/* ══════════ DASHBOARD ══════════ */}
       {aba === "dashboard" && (
         <div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-            {/* Gastos por categoria */}
-            <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, padding: "1.25rem" }}>
-              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 16 }}>Gastos por categoria</div>
-              {porCategoriaSaida.length === 0 && <div style={{ fontSize: 13, color: "#aaa" }}>Nenhuma despesa no periodo.</div>}
-              {porCategoriaSaida.map(({ cat, total }) => {
-                const pct = totalSaidas > 0 ? Math.round((total / totalSaidas) * 100) : 0;
-                const isDemissao = CATS_DEMISSAO.includes(cat);
-                const subs = lancamentos.filter((l) => l.tipo === "saida" && l.categoria === cat && l.subcategoria)
-                  .reduce((acc, l) => { acc[l.subcategoria] = (acc[l.subcategoria] || 0) + Number(l.valor); return acc; }, {});
-                return (
-                  <div key={cat} style={{ marginBottom: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
-                      <span style={{ fontWeight: 500 }}>
-                        {cat}{isDemissao && <span style={{ fontSize: 10, color: "#A32D2D", marginLeft: 6, background: "#FCEBEB", padding: "1px 6px", borderRadius: 10 }}>demissao</span>}
-                      </span>
-                      <span style={{ color: "#A32D2D", fontWeight: 500 }}>{fmtMoeda(total)} <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({pct}%)</span></span>
-                    </div>
-                    <div style={{ height: 7, background: "#f0f0f0", borderRadius: 4, overflow: "hidden", marginBottom: 4 }}>
-                      <div style={{ height: "100%", width: `${pct}%`, background: isDemissao ? "#E24B4A" : "#A32D2D", borderRadius: 4, opacity: 0.7 }} />
-                    </div>
-                    {Object.entries(subs).map(([sub, val]) => (
-                      <div key={sub} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#888", paddingLeft: 12, marginTop: 2 }}>
-                        <span>↳ {sub}</span><span>{fmtMoeda(val)}</span>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
+          {/* KPIs */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10, marginBottom: 20 }}>
+            {[
+              { label: "Saldo inicial",   val: saldoInicial, cor: "#2980B9" },
+              { label: "Total receitas",  val: totalReceitas, cor: "#1D9E75" },
+              { label: "Total despesas",  val: totalDespesas, cor: "#E74C3C" },
+              { label: "Resultado",       val: resultado, cor: resultado >= 0 ? "#1D9E75" : "#E74C3C" },
+            ].map(k => (
+              <div key={k.label} style={{ ...S.card }}>
+                <div style={S.label}>{k.label}</div>
+                <div style={{ ...S.val, color: k.cor }}>{fmtMoeda(k.val)}</div>
+              </div>
+            ))}
+          </div>
 
-            {/* Receitas por categoria */}
-            <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, padding: "1.25rem" }}>
-              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 16 }}>Receitas por categoria</div>
-              {porCategoriaEntrada.length === 0 && <div style={{ fontSize: 13, color: "#aaa" }}>Nenhuma receita no periodo.</div>}
-              {porCategoriaEntrada.map(([cat, val]) => {
-                const pct = totalEntradas > 0 ? Math.round((val / totalEntradas) * 100) : 0;
-                const subs = lancamentos.filter((l) => l.tipo === "entrada" && l.categoria === cat && l.subcategoria)
-                  .reduce((acc, l) => { acc[l.subcategoria] = (acc[l.subcategoria] || 0) + Number(l.valor); return acc; }, {});
-                return (
-                  <div key={cat} style={{ marginBottom: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
-                      <span style={{ fontWeight: 500 }}>{cat}</span>
-                      <span style={{ color: "#1D9E75", fontWeight: 500 }}>{fmtMoeda(val)} <span style={{ fontSize: 11, color: "#aaa", fontWeight: 400 }}>({pct}%)</span></span>
-                    </div>
-                    <div style={{ height: 7, background: "#f0f0f0", borderRadius: 4, overflow: "hidden", marginBottom: 4 }}>
-                      <div style={{ height: "100%", width: `${pct}%`, background: "#1D9E75", borderRadius: 4, opacity: 0.7 }} />
-                    </div>
-                    {Object.entries(subs).map(([sub, val2]) => (
-                      <div key={sub} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#888", paddingLeft: 12, marginTop: 2 }}>
-                        <span>↳ {sub}</span><span>{fmtMoeda(val2)}</span>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
+          {/* Gráficos */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+            <div style={S.card}>
+              <GraficoPizza dados={despPorCat} titulo="Despesas por categoria" />
+            </div>
+            <div style={S.card}>
+              <GraficoBarras
+                titulo="Receitas vs Despesas"
+                dados={[{ label: labelPeriodo.split(" ")[0].slice(0,3), receitas: totalReceitas, despesas: totalDespesas }]}
+              />
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-            {/* Ultimos lancamentos */}
-            <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, padding: "1.25rem" }}>
-              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 12 }}>Ultimos lancamentos</div>
-              {lancamentos.slice(0, 8).map((l) => (
-                <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: "0.5px solid #f0f0f0", fontSize: 13 }}>
-                  <span style={{ padding: "1px 8px", borderRadius: 20, fontSize: 10, background: l.tipo === "entrada" ? "#EAF3DE" : "#FCEBEB", color: l.tipo === "entrada" ? "#27500A" : "#791F1F" }}>{l.tipo}</span>
-                  <span style={{ flex: 1, color: "#555", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.descricao}</span>
-                  <span style={{ fontSize: 11, color: "#aaa" }}>{fmt(l.data)}</span>
-                  <span style={{ fontWeight: 500, color: l.tipo === "entrada" ? "#1D9E75" : "#A32D2D", whiteSpace: "nowrap" }}>{l.tipo === "entrada" ? "+" : "-"}{fmtMoeda(l.valor)}</span>
-                </div>
-              ))}
-              {lancamentos.length === 0 && <div style={{ fontSize: 13, color: "#aaa" }}>Nenhum lancamento.</div>}
-            </div>
-
-            {/* Analise de margem */}
-            <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, padding: "1.25rem" }}>
-              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 16 }}>Analise de margem</div>
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
-                  <span style={{ color: "#888" }}>Receita bruta</span>
-                  <span style={{ fontWeight: 500, color: "#1D9E75" }}>{fmtMoeda(totalEntradas)}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
-                  <span style={{ color: "#888" }}>(-) Despesas operacionais</span>
-                  <span style={{ fontWeight: 500, color: "#A32D2D" }}>-{fmtMoeda(totalSaidas - totalDemissoes)}</span>
-                </div>
-                {totalDemissoes > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
-                    <span style={{ color: "#888" }}>(-) Encargos de demissao</span>
-                    <span style={{ fontWeight: 500, color: "#E24B4A" }}>-{fmtMoeda(totalDemissoes)}</span>
-                  </div>
-                )}
-                <div style={{ borderTop: "1px solid #e0e0e0", paddingTop: 8, display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                  <span style={{ fontWeight: 500 }}>Resultado liquido</span>
-                  <span style={{ fontWeight: 500, color: saldo >= 0 ? "#1D9E75" : "#A32D2D" }}>{fmtMoeda(saldo)}</span>
-                </div>
+          {/* Últimas movimentações */}
+          <div style={S.card}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Últimas movimentações</div>
+            {[...receitas.filter(r => !r.is_saldo_inicial).slice(0, 5).map(r => ({ ...r, _tipo: "receita" })),
+               ...despesas.slice(0, 5).map(d => ({ ...d, _tipo: "despesa" }))
+             ].sort((a, b) => b.data.localeCompare(a.data)).slice(0, 8).map(l => (
+              <div key={l.id} style={{ display: "flex", gap: 10, padding: "7px 0", borderBottom: "0.5px solid #f0f0f0", fontSize: 13, alignItems: "center" }}>
+                <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 20, background: l._tipo === "receita" ? "#E1F5EE" : "#FCEBEB", color: l._tipo === "receita" ? "#085041" : "#791F1F" }}>
+                  {l._tipo}
+                </span>
+                <span style={{ flex: 1, color: "#444" }}>{l.descricao}</span>
+                <span style={{ fontSize: 11, color: "#aaa" }}>{fmt(l.data)}</span>
+                <span style={{ fontWeight: 600, color: l._tipo === "receita" ? "#1D9E75" : "#E74C3C" }}>
+                  {l._tipo === "receita" ? "+" : "-"}{fmtMoeda(l.valor)}
+                </span>
               </div>
-              <div style={{ background: "#f7f7f5", borderRadius: 8, padding: "12px" }}>
-                <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>Margem de resultado</div>
-                <div style={{ height: 12, background: "#e0e0e0", borderRadius: 6, overflow: "hidden", marginBottom: 8 }}>
-                  <div style={{ height: "100%", width: `${Math.min(100, Math.abs(margem))}%`, background: saldo >= 0 ? "#1D9E75" : "#A32D2D", borderRadius: 6 }} />
-                </div>
-                <div style={{ fontSize: 22, fontWeight: 500, color: saldo >= 0 ? "#1D9E75" : "#A32D2D", textAlign: "center" }}>{margem}%</div>
-                <div style={{ fontSize: 12, color: "#888", textAlign: "center", marginTop: 4 }}>
-                  {totalEntradas > 0 ? (saldo >= 0 ? `Para cada R$1,00 recebido, sobram R$${(saldo/totalEntradas).toFixed(2)}` : `Para cada R$1,00 recebido, gasta-se R$${(totalSaidas/totalEntradas).toFixed(2)}`) : "Sem receitas no periodo"}
-                </div>
-              </div>
-            </div>
+            ))}
+            {receitas.length === 0 && despesas.length === 0 && (
+              <div style={{ color: "#aaa", fontSize: 13, textAlign: "center", padding: "1rem" }}>Nenhuma movimentação no período.</div>
+            )}
           </div>
         </div>
       )}
 
-      {/* ── CUSTO/ALUNO ── */}
-      {aba === "demissoes" && (() => {
-        const custoTotal = totalSaidas;
-        const custoAluno = numAlunos > 0 ? custoTotal / numAlunos : 0;
-        // Custo/hora baseado em 8h integral como referencia
-        const custoHora = custoAluno / (8 * 22);
-        // Mensalidade proporcional as horas contratadas
-        const custoMensalidade = custoHora * horasDia * 22;
-        const valorSugerido = custoMensalidade * (1 + margemCalc / 100);
-        // Breakdown por categoria
-        const catsCusto = [
-          { nome: "Salarios", cats: ["Salarios", "Encargos Trabalhistas"] },
-          { nome: "Alimentacao", cats: ["Alimentacao"] },
-          { nome: "Material Pedagogico", cats: ["Material Pedagogico"] },
-          { nome: "Agua/Energia/Tel", cats: ["Agua/Energia", "Telefone/Internet"] },
-          { nome: "Contabilidade/Nutri", cats: ["Contabilidade", "Nutricionista"] },
-          { nome: "Outros", cats: ["Manutencao", "Limpeza", "Transporte", "Seguro", "Outros"] },
-        ];
-        return (
-          <div>
-            {/* KPIs principais */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginBottom: 20 }}>
-              <MetricCard label="Custo total" value={fmtMoeda(custoTotal)} subColor="#A32D2D" sub="despesas no periodo" accent="#FCEBEB" />
-              <MetricCard label="Custo por aluno" value={fmtMoeda(custoAluno)} subColor="#A32D2D" sub={`com ${numAlunos} alunos`} accent="#FFF5F5" />
-              <MetricCard label="Custo por hora" value={fmtMoeda(custoHora)} subColor="#BA7517" sub={`${horasDia}h/dia x 22 dias`} accent="#FAEEDA" />
-              <MetricCard label="Mensalidade sugerida" value={fmtMoeda(valorSugerido)} subColor="#1D9E75" sub={`${horasDia}h/dia · ${margemCalc}% margem`} accent="#E1F5EE" />
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-              {/* Calculadora */}
-              <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, padding: "1.25rem" }}>
-                <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 16 }}>Calculadora de mensalidade</div>
-
-                <div style={{ marginBottom: 14 }}>
-                  <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>Numero de alunos</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <input type="range" min={10} max={150} value={numAlunos} onChange={e => setNumAlunos(Number(e.target.value))}
-                      style={{ flex: 1, accentColor: "#1D9E75" }} />
-                    <input type="number" value={numAlunos} onChange={e => setNumAlunos(Number(e.target.value))}
-                      style={{ width: 60, padding: "4px 8px", borderRadius: 6, border: "0.5px solid #ccc", fontSize: 13, textAlign: "center", fontFamily: "inherit" }} />
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: 14 }}>
-                  <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>Horas por dia que o aluno fica</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <input type="range" min={1} max={12} value={horasDia} onChange={e => setHorasDia(Number(e.target.value))}
-                      style={{ flex: 1, accentColor: "#1D9E75" }} />
-                    <input type="number" value={horasDia} onChange={e => setHorasDia(Number(e.target.value))}
-                      style={{ width: 60, padding: "4px 8px", borderRadius: 6, border: "0.5px solid #ccc", fontSize: 13, textAlign: "center", fontFamily: "inherit" }} />
-                    <span style={{ fontSize: 12, color: "#888" }}>h</span>
-                  </div>
-                  <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>
-                    {horasDia <= 4 ? "Meio periodo (manha ou tarde)" : horasDia <= 7 ? "Periodo estendido" : "Periodo integral"}
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>Margem de sustentabilidade (%)</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <input type="range" min={0} max={50} value={margemCalc} onChange={e => setMargemCalc(Number(e.target.value))}
-                      style={{ flex: 1, accentColor: "#1D9E75" }} />
-                    <input type="number" value={margemCalc} onChange={e => setMargemCalc(Number(e.target.value))}
-                      style={{ width: 60, padding: "4px 8px", borderRadius: 6, border: "0.5px solid #ccc", fontSize: 13, textAlign: "center", fontFamily: "inherit" }} />
-                    <span style={{ fontSize: 12, color: "#888" }}>%</span>
-                  </div>
-                </div>
-
-                <div style={{ background: "#E1F5EE", borderRadius: 10, padding: "16px", textAlign: "center" }}>
-                  <div style={{ fontSize: 12, color: "#085041", marginBottom: 4 }}>Mensalidade sugerida</div>
-                  <div style={{ fontSize: 28, fontWeight: 600, color: "#085041" }}>{fmtMoeda(valorSugerido)}</div>
-                  <div style={{ fontSize: 11, color: "#1D9E75", marginTop: 4 }}>
-                    {fmtMoeda(custoHora)}/hora · {fmtMoeda(custoMensalidade)} custo real ({horasDia}h/dia)
-                  </div>
-                </div>
-              </div>
-
-              {/* Breakdown de custos */}
-              <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, padding: "1.25rem" }}>
-                <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 16 }}>Composicao do custo por aluno</div>
-                {catsCusto.map(({ nome, cats }) => {
-                  const total = lancamentos.filter(l => cats.includes(l.categoria) && l.tipo === "saida").reduce((s,l) => s + Number(l.valor), 0);
-                  if (total === 0) return null;
-                  const porAluno = numAlunos > 0 ? total / numAlunos : 0;
-                  const pct = custoTotal > 0 ? Math.round((total / custoTotal) * 100) : 0;
-                  return (
-                    <div key={nome} style={{ marginBottom: 12 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
-                        <span style={{ color: "#555", fontWeight: 500 }}>{nome}</span>
-                        <span style={{ color: "#333" }}>{fmtMoeda(porAluno)}/aluno <span style={{ color: "#aaa" }}>({pct}%)</span></span>
-                      </div>
-                      <div style={{ height: 6, background: "#f0f0ee", borderRadius: 3, overflow: "hidden" }}>
-                        <div style={{ height: "100%", width: `${pct}%`, background: "#1D9E75", borderRadius: 3, opacity: 0.7 }} />
-                      </div>
-                    </div>
-                  );
-                })}
-                {custoTotal === 0 && <div style={{ fontSize: 13, color: "#aaa", textAlign: "center", padding: "2rem 0" }}>Sem despesas no periodo selecionado.</div>}
-              </div>
-            </div>
-
-            {/* Tabela simulacao por turno */}
-            <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ padding: "16px 20px", borderBottom: "0.5px solid #e0e0e0", fontSize: 14, fontWeight: 500 }}>
-                Simulacao por turno
-              </div>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr style={{ background: "#f7f7f5" }}>
-                  {["Turno","Horas/dia","Custo real","Sugerido (+"+margemCalc+"%)"].map(h => (
-                    <th key={h} style={{ padding: "10px 20px", fontSize: 12, fontWeight: 500, color: "#777", textAlign: h === "Turno" ? "left" : "right", borderBottom: "0.5px solid #e0e0e0" }}>{h}</th>
-                  ))}
-                </tr></thead>
-                <tbody>
-                  {[["Meio periodo","4h",4],["Periodo estendido","6h",6],["Integral","8h",8],["Integral plus","10h",10]].map(([turno, label, h]) => {
-                    const custo = custoHora * h * 22;
-                    const sugerido = custo * (1 + margemCalc / 100);
-                    return (
-                      <tr key={turno} style={{ borderBottom: "0.5px solid #f0f0f0", background: h === horasDia ? "#F0FAF6" : "transparent" }}>
-                        <td style={{ padding: "12px 20px", fontSize: 13, fontWeight: h === horasDia ? 600 : 400 }}>
-                          {turno} {h === horasDia && <span style={{ fontSize: 10, background: "#1D9E75", color: "#fff", padding: "1px 6px", borderRadius: 10, marginLeft: 6 }}>selecionado</span>}
-                        </td>
-                        <td style={{ padding: "12px 20px", fontSize: 13, textAlign: "right", color: "#888" }}>{label}</td>
-                        <td style={{ padding: "12px 20px", fontSize: 13, textAlign: "right", color: "#A32D2D", fontWeight: 500 }}>{fmtMoeda(custo)}</td>
-                        <td style={{ padding: "12px 20px", fontSize: 13, textAlign: "right", color: "#1D9E75", fontWeight: 600 }}>{fmtMoeda(sugerido)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+      {/* ══════════ RECEITAS ══════════ */}
+      {aba === "receitas" && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+            <Btn variant="primary" onClick={() => { setFormRec(formRecDefault); setEditItem(null); setModal("receita"); }}>+ Nova receita</Btn>
           </div>
-        );
-      })()}
-
-      {/* ── REGRAS DA IA ── */}
-      {aba === "regras" && (
-        <div style={{ background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ padding: "16px 20px", borderBottom: "0.5px solid #e0e0e0", fontSize: 14, fontWeight: 500 }}>
-            Regras aprendidas pela IA
-            <span style={{ fontSize: 12, color: "#888", fontWeight: 400, marginLeft: 8 }}>fornecedor → categoria automatica</span>
-          </div>
-          {Object.keys(regras).length === 0 && (
-            <div style={{ padding: 24, textAlign: "center", fontSize: 13, color: "#aaa" }}>
-              Nenhuma regra ainda. Importe documentos para a IA aprender automaticamente.
-            </div>
-          )}
-          <Table headers={["Fornecedor / Descricao", "Categoria automatica", ""]}>
-            {Object.entries(regras).map(([forn, cat]) => (
-              <tr key={forn} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
-                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 500 }}>{forn}</td>
-                <td style={{ padding: "10px 14px" }}><Badge color="info">{cat}</Badge></td>
-                <td style={{ padding: "10px 14px" }}>
-                  <Btn small variant="danger" onClick={async () => { await supabase.from("financeiro_regras").delete().eq("fornecedor_chave", forn); carregarRegras(); }}>Remover</Btn>
+          <Table headers={["Data", "Descrição", "Tipo", "Categoria", "Conta", "Valor", ""]}>
+            {receitas.map(r => (
+              <tr key={r.id} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
+                <td style={{ padding: "10px 14px", fontSize: 12, color: "#888" }}>{fmt(r.data)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 500 }}>
+                  {r.descricao}
+                  {r.is_saldo_inicial && <span style={{ marginLeft: 6, fontSize: 10, background: "#E6F1FB", color: "#185FA5", padding: "1px 6px", borderRadius: 10 }}>saldo inicial</span>}
+                  {r.referencia && <div style={{ fontSize: 11, color: "#aaa" }}>Ref: {r.referencia}</div>}
+                </td>
+                <td style={{ padding: "10px 14px", fontSize: 12, color: "#555" }}>{r.tipo}</td>
+                <td style={{ padding: "10px 14px", fontSize: 12 }}>
+                  {r.fin_categorias ? (
+                    <span style={{ background: r.fin_categorias.cor + "22", color: r.fin_categorias.cor, padding: "2px 8px", borderRadius: 10, fontSize: 11 }}>
+                      {r.fin_categorias.nome}
+                    </span>
+                  ) : "—"}
+                </td>
+                <td style={{ padding: "10px 14px", fontSize: 12, color: "#555" }}>
+                  {contas.find(c => c.id === r.conta_id)?.nome || "—"}
+                </td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: "#1D9E75" }}>
+                  +{fmtMoeda(r.valor)}
+                </td>
+                <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
+                  <Btn small onClick={() => { setFormRec({ ...r, valor: String(r.valor) }); setEditItem(r); setModal("receita"); }} style={{ marginRight: 4 }}>Editar</Btn>
+                  <Btn small variant="danger" onClick={() => setConfirmData({ title: "Excluir receita", message: `Excluir "${r.descricao}"?`, onConfirm: () => excluir("fin_receitas", r) })}>Excluir</Btn>
                 </td>
               </tr>
             ))}
+            {receitas.length === 0 && <EmptyRow colSpan={7} message="Nenhuma receita no período." />}
           </Table>
         </div>
       )}
 
-      {/* ── MODAL: Lancamento ── */}
-      {modal === "form" && (
-        <Modal title={editLanc ? "Editar lancamento" : "Novo lancamento"} onClose={() => setModal(null)}>
-
-          {/* Checkbox: Saldo Inicial — só exibe em novos lançamentos */}
-          {!editLanc && (
-            <label style={{
-              display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
-              background: form.isSaldoInicial ? "#E1F5EE" : "#f7f7f5",
-              borderRadius: 8, marginBottom: 14, cursor: "pointer",
-              border: form.isSaldoInicial ? "1px solid #1D9E75" : "1px solid transparent",
-              transition: "all .15s",
-            }}>
-              <input
-                type="checkbox"
-                checked={!!form.isSaldoInicial}
-                onChange={(e) => setForm({
-                  ...form,
-                  isSaldoInicial: e.target.checked,
-                  // quando ativa, limpa campos que não fazem sentido
-                  descricao: e.target.checked ? "Saldo inicial" : "",
-                  tipo: "entrada",
-                  categoria: e.target.checked ? "Saldo Inicial" : (categorias[0] || ""),
-                  subcategoria: "",
-                  observacao: e.target.checked ? "Não contabilizado no DRE" : "",
-                })}
-                style={{ width: 16, height: 16, accentColor: "#1D9E75", cursor: "pointer", flexShrink: 0 }}
-              />
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 500, color: "#085041" }}>💰 Este é o saldo inicial</div>
-                <div style={{ fontSize: 11, color: "#555", marginTop: 1 }}>
-                  Valor em caixa antes de começar os lançamentos — não entra no DRE
+      {/* ══════════ DESPESAS ══════════ */}
+      {aba === "despesas" && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+            <div style={{ display: "flex", gap: 12 }}>
+              {despPorCat.slice(0, 3).map(d => (
+                <div key={d.nome} style={{ fontSize: 12, color: "#555" }}>
+                  <span style={{ fontWeight: 600 }}>{d.nome}:</span> {fmtMoeda(d.valor)}
                 </div>
+              ))}
+            </div>
+            <Btn variant="danger" onClick={() => { setFormDesp(formDespDefault); setEditItem(null); setModal("despesa"); }}>+ Nova despesa</Btn>
+          </div>
+          <Table headers={["Data", "Descrição", "Categoria", "Tipo", "Conta", "Valor", ""]}>
+            {despesas.map(d => (
+              <tr key={d.id} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
+                <td style={{ padding: "10px 14px", fontSize: 12, color: "#888" }}>{fmt(d.data)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 500 }}>
+                  {d.descricao}
+                  {d.recorrencia_id && <span style={{ marginLeft: 6, fontSize: 10, background: "#FAEEDA", color: "#633806", padding: "1px 6px", borderRadius: 10 }}>recorrente</span>}
+                </td>
+                <td style={{ padding: "10px 14px", fontSize: 12 }}>
+                  {d.fin_categorias ? (
+                    <span style={{ background: d.fin_categorias.cor + "22", color: d.fin_categorias.cor, padding: "2px 8px", borderRadius: 10, fontSize: 11 }}>
+                      {d.fin_categorias.nome}
+                    </span>
+                  ) : <span style={{ fontSize: 12, color: "#aaa" }}>—</span>}
+                </td>
+                <td style={{ padding: "10px 14px", fontSize: 12 }}>
+                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, background: d.tipo === "fixa" ? "#E6F1FB" : "#f5f5f3", color: d.tipo === "fixa" ? "#185FA5" : "#555" }}>
+                    {d.tipo}
+                  </span>
+                </td>
+                <td style={{ padding: "10px 14px", fontSize: 12, color: "#555" }}>
+                  {contas.find(c => c.id === d.conta_id)?.nome || "—"}
+                </td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: "#E74C3C" }}>
+                  -{fmtMoeda(d.valor)}
+                </td>
+                <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
+                  <Btn small onClick={() => { setFormDesp({ ...d, valor: String(d.valor), categoria_id: String(d.categoria_id || "") }); setEditItem(d); setModal("despesa"); }} style={{ marginRight: 4 }}>Editar</Btn>
+                  <Btn small variant="danger" onClick={() => setConfirmData({ title: "Excluir despesa", message: `Excluir "${d.descricao}"?`, onConfirm: () => excluir("fin_despesas", d) })}>Excluir</Btn>
+                </td>
+              </tr>
+            ))}
+            {despesas.length === 0 && <EmptyRow colSpan={7} message="Nenhuma despesa no período." />}
+          </Table>
+        </div>
+      )}
+
+      {/* ══════════ CALCULADORA ══════════ */}
+      {aba === "calculadora" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          {/* Inputs */}
+          <div style={S.card}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>🧮 Parâmetros</div>
+            {[
+              { key: "alunos",   label: "Total de alunos",          min: 1,  max: 500, step: 1  },
+              { key: "custos",   label: "Custos mensais totais (R$)", min: 0,  max: 999999, step: 100 },
+              { key: "margem",   label: "Margem desejada (%)",       min: 0,  max: 100, step: 1  },
+              { key: "horas",    label: "Horas/dia do aluno",        min: 1,  max: 12, step: 0.5 },
+              { key: "ocupacao", label: "Taxa de ocupação (%)",      min: 10, max: 100, step: 5  },
+            ].map(({ key, label, min, max, step }) => (
+              <div key={key} style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{label}</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input type="range" min={min} max={max} step={step} value={calc[key]}
+                    onChange={e => setCalc(c => ({ ...c, [key]: Number(e.target.value) }))}
+                    style={{ flex: 1, accentColor: "#1D9E75" }} />
+                  <input type="number" value={calc[key]} min={min} max={max} step={step}
+                    onChange={e => setCalc(c => ({ ...c, [key]: Number(e.target.value) }))}
+                    style={{ width: 80, padding: "5px 8px", borderRadius: 6, border: "0.5px solid #ccc", fontSize: 13, fontFamily: "inherit" }} />
+                </div>
+                {key === "horas" && (
+                  <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>
+                    {calc.horas <= 4 ? "Meio período" : calc.horas <= 6 ? "Período estendido" : "Integral"}
+                  </div>
+                )}
+              </div>
+            ))}
+            <div style={{ fontSize: 12, color: "#888", background: "#f7f7f5", borderRadius: 8, padding: 10, marginTop: 8 }}>
+              Alunos efetivos: <strong>{Math.round(calc.alunos * calc.ocupacao / 100)}</strong> ({calc.ocupacao}% de {calc.alunos})
+            </div>
+          </div>
+
+          {/* Resultados */}
+          <div>
+            <div style={{ ...S.card, background: "#1D9E75", color: "#fff", marginBottom: 12, textAlign: "center" }}>
+              <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>Mensalidade ideal ({calc.horas}h/dia)</div>
+              <div style={{ fontSize: 36, fontWeight: 700 }}>{fmtMoeda(calcResult.mensalidadeIdeal)}</div>
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>por aluno / mês</div>
+            </div>
+            {[
+              { label: "Custo real por aluno",   val: calcResult.custoAluno,    cor: "#E74C3C" },
+              { label: "Faturamento necessário",  val: calcResult.faturamentoNec, cor: "#2980B9" },
+              { label: "Lucro estimado",          val: calcResult.lucroEstimado, cor: calcResult.lucroEstimado >= 0 ? "#1D9E75" : "#E74C3C" },
+            ].map(k => (
+              <div key={k.label} style={{ ...S.card, marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "#888" }}>{k.label}</div>
+                <div style={{ fontSize: 22, fontWeight: 600, color: k.cor }}>{fmtMoeda(k.val)}</div>
+              </div>
+            ))}
+            {/* Tabela por turno */}
+            <div style={S.card}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Simulação por turno</div>
+              {[["Meio período", 4], ["Período estendido", 6], ["Integral", 8], ["Integral Plus", 10]].map(([turno, h]) => {
+                const { alunos, custos, margem, ocupacao } = calc;
+                const ef = alunos * (ocupacao / 100);
+                const ch = ef > 0 ? custos / ef / 8 : 0;
+                const val = ch * h * (1 + margem / 100);
+                return (
+                  <div key={turno} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "0.5px solid #f5f5f5", fontSize: 13, background: h === calc.horas ? "#f0faf6" : "transparent", borderRadius: 4, paddingInline: 4 }}>
+                    <span style={{ color: "#555" }}>{turno} <span style={{ color: "#aaa", fontSize: 11 }}>({h}h)</span></span>
+                    <span style={{ fontWeight: 600, color: "#1D9E75" }}>{fmtMoeda(val)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════ RECORRÊNCIAS ══════════ */}
+      {aba === "recorrencias" && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: "#888" }}>Despesas fixas geradas automaticamente todo mês</div>
+            <Btn variant="primary" onClick={() => { setFormRecorr(formRecorrDefault); setModal("recorrencia"); }}>+ Nova recorrência</Btn>
+          </div>
+          <Table headers={["Descrição", "Categoria", "Valor", "Vencimento", "Última geração", ""]}>
+            {recorrencias.map(r => (
+              <tr key={r.id} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 500 }}>{r.descricao}</td>
+                <td style={{ padding: "10px 14px", fontSize: 12 }}>{r.fin_categorias?.nome || "—"}</td>
+                <td style={{ padding: "10px 14px", fontSize: 13, fontWeight: 600, color: "#E74C3C" }}>{fmtMoeda(r.valor)}</td>
+                <td style={{ padding: "10px 14px", fontSize: 12, color: "#555" }}>Dia {r.dia_vencimento}</td>
+                <td style={{ padding: "10px 14px", fontSize: 12, color: "#aaa" }}>{r.ultima_geracao ? fmt(r.ultima_geracao) : "Nunca"}</td>
+                <td style={{ padding: "10px 14px" }}>
+                  <Btn small variant="danger" onClick={() => setConfirmData({ title: "Excluir recorrência", message: `Excluir "${r.descricao}"?`, onConfirm: () => excluir("fin_recorrencias", r) })}>Excluir</Btn>
+                </td>
+              </tr>
+            ))}
+            {recorrencias.length === 0 && <EmptyRow colSpan={6} message="Nenhuma recorrência." />}
+          </Table>
+        </div>
+      )}
+
+      {/* ══════════ CONTAS ══════════ */}
+      {aba === "contas" && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 16 }}>
+          {contas.map(c => {
+            const entradas = receitas.filter(r => r.conta_id === c.id).reduce((s, r) => s + Number(r.valor), 0);
+            const saidas   = despesas.filter(d => d.conta_id === c.id).reduce((s, d) => s + Number(d.valor), 0);
+            const saldo    = c.saldo_inicial + entradas - saidas;
+            return (
+              <div key={c.id} style={{ ...S.card, borderLeft: `4px solid ${saldo >= 0 ? "#1D9E75" : "#E74C3C"}` }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>
+                  {{banco: "🏦", caixa: "💵", pix: "📲", investimento: "📈"}[c.tipo]} {c.nome}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                  <div><div style={S.label}>Entradas</div><div style={{ fontSize: 15, color: "#1D9E75", fontWeight: 600 }}>{fmtMoeda(entradas)}</div></div>
+                  <div><div style={S.label}>Saídas</div><div style={{ fontSize: 15, color: "#E74C3C", fontWeight: 600 }}>{fmtMoeda(saidas)}</div></div>
+                </div>
+                <div style={{ borderTop: "0.5px solid #f0f0f0", paddingTop: 10 }}>
+                  <div style={S.label}>Saldo atual</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: saldo >= 0 ? "#1D9E75" : "#E74C3C" }}>{fmtMoeda(saldo)}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ══════════ MODAIS ══════════ */}
+
+      {/* Modal Receita */}
+      {modal === "receita" && (
+        <Modal title={editItem ? "Editar receita" : "Nova receita"} onClose={() => setModal(null)}>
+          {/* Saldo inicial */}
+          {!editItem && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: formRec.is_saldo_inicial ? "#E1F5EE" : "#f7f7f5", borderRadius: 8, marginBottom: 12, cursor: "pointer", border: formRec.is_saldo_inicial ? "1px solid #1D9E75" : "1px solid transparent" }}>
+              <input type="checkbox" checked={!!formRec.is_saldo_inicial}
+                onChange={e => setFormRec(f => ({ ...f, is_saldo_inicial: e.target.checked, descricao: e.target.checked ? "Saldo inicial" : "", tipo: "outros" }))}
+                style={{ accentColor: "#1D9E75" }} />
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500 }}>💰 Saldo inicial</div>
+                <div style={{ fontSize: 11, color: "#666" }}>Ponto de partida do caixa — não entra no DRE</div>
               </div>
             </label>
           )}
-
-          {/* Campos normais — desabilitados/ocultos quando é saldo inicial */}
-          {!form.isSaldoInicial && (
-            <Input label="Descricao *" value={form.descricao}
-              onChange={(e) => setForm({ ...form, descricao: e.target.value })}
-              placeholder="Ex: Compra de arroz, Pagamento luz, Rescisao funcionario..." />
+          {!formRec.is_saldo_inicial && (
+            <Input label="Descrição *" value={formRec.descricao} onChange={e => setFormRec(f => ({ ...f, descricao: e.target.value }))} placeholder="Ex: Mensalidade João Silva" />
           )}
-
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <Input label="Valor (R$) *" type="number" step="0.01" min="0"
-              value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} />
-            <Input label="Data" type="date"
-              value={form.data} onChange={(e) => setForm({ ...form, data: e.target.value })} />
+            <Input label="Valor (R$) *" type="number" step="0.01" min="0" value={formRec.valor} onChange={e => setFormRec(f => ({ ...f, valor: e.target.value }))} />
+            <Input label="Data *" type="date" value={formRec.data} onChange={e => setFormRec(f => ({ ...f, data: e.target.value }))} />
           </div>
-
-          {!form.isSaldoInicial && (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <SelectField label="Tipo" value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
-                  <option value="saida">Saida (despesa)</option>
-                  <option value="entrada">Entrada (receita)</option>
-                </SelectField>
-                <SelectField label="Categoria" value={form.categoria}
-                  onChange={(e) => setForm({ ...form, categoria: e.target.value, subcategoria: "" })}>
-                  {categorias.map((c) => <option key={c}>{c}</option>)}
-                </SelectField>
-              </div>
-              <Input label="Subcategoria (opcional)" value={form.subcategoria || ""}
-                onChange={(e) => setForm({ ...form, subcategoria: e.target.value })}
-                placeholder="Ex: Repasse convenio, Vaga particular, FGTS multa 40%..." />
-              <Input label="Observacao (opcional)" value={form.observacao || ""}
-                onChange={(e) => setForm({ ...form, observacao: e.target.value })} />
-            </>
-          )}
-
-          {form.isSaldoInicial && (
-            <div style={{ padding: "10px 14px", background: "#fffbea", borderRadius: 8, fontSize: 12, color: "#7a5c00", border: "1px solid #f5e090" }}>
-              ⚠️ Este lançamento <strong>não será exibido no DRE</strong> e não afeta o resultado contábil do período.
-              Ele aparece apenas no <strong>Saldo Acumulado</strong> como ponto de partida.
+          {!formRec.is_saldo_inicial && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <SelectField label="Tipo" value={formRec.tipo} onChange={e => setFormRec(f => ({ ...f, tipo: e.target.value }))}>
+                <option value="mensalidade">Mensalidade</option>
+                <option value="matricula">Matrícula</option>
+                <option value="convenio">Convênio</option>
+                <option value="doacao">Doação</option>
+                <option value="outros">Outros</option>
+              </SelectField>
+              <SelectField label="Conta" value={formRec.conta_id} onChange={e => setFormRec(f => ({ ...f, conta_id: e.target.value }))}>
+                <option value="">Sem conta</option>
+                {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+              </SelectField>
             </div>
           )}
-
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+          {!formRec.is_saldo_inicial && (
+            <Input label="Referência (opcional)" value={formRec.referencia} onChange={e => setFormRec(f => ({ ...f, referencia: e.target.value }))} placeholder="Ex: Abril/2026" />
+          )}
+          <Input label="Observação" value={formRec.observacao} onChange={e => setFormRec(f => ({ ...f, observacao: e.target.value }))} />
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
             <Btn onClick={() => setModal(null)}>Cancelar</Btn>
-            <Btn variant="primary" onClick={salvar} disabled={loading || !form.valor}>
-              {loading ? "Salvando..." : (form.isSaldoInicial ? "Registrar saldo inicial" : "Salvar")}
-            </Btn>
+            <Btn variant="primary" onClick={salvarReceita} disabled={loading}>{loading ? "Salvando..." : "Salvar"}</Btn>
           </div>
         </Modal>
       )}
 
-      {/* ── MODAL: Upload ── */}
-      {modal === "upload" && (
-        <Modal title="Subir documento — leitura automatica por IA" onClose={() => { setModal(null); setUploadResultados([]); setUploadFile(null); setUploadErro(""); }} width={680}>
-          {uploadResultados.length === 0 ? (
-            <>
-              <div style={{ border: "1.5px dashed #ccc", borderRadius: 10, padding: "2rem", textAlign: "center", marginBottom: 16, cursor: "pointer", background: "#fafafa" }}
-                onClick={() => document.getElementById("fileInput").click()}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) setUploadFile(f); }}>
-                <div style={{ fontSize: 28, marginBottom: 8 }}>📄</div>
-                <div style={{ fontSize: 14, fontWeight: 500, color: "#333" }}>{uploadFile ? uploadFile.name : "Clique ou arraste o arquivo aqui"}</div>
-                <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>PDF de extrato, nota fiscal, foto de comprovante ou cupom</div>
-                <input id="fileInput" type="file" accept=".pdf,image/*" style={{ display: "none" }} onChange={(e) => setUploadFile(e.target.files[0])} />
-              </div>
-              {uploadErro && <AlertBar type="danger">{uploadErro}</AlertBar>}
-              <div style={{ fontSize: 12, color: "#888", marginBottom: 16, padding: "10px", background: "#f7f7f5", borderRadius: 8 }}>
-                A IA vai ler o documento e sugerir categorias automaticamente. Documentos com "RESCISAO", "FGTS", "AVISO PREVIO" serao automaticamente categorizados como encargos de demissao.
-              </div>
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <Btn onClick={() => { setModal(null); setUploadFile(null); setUploadErro(""); }}>Cancelar</Btn>
-                <Btn variant="primary" onClick={processarArquivo} disabled={!uploadFile || uploadLoading}>
-                  {uploadLoading ? "Processando..." : "Processar com IA"}
-                </Btn>
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ fontSize: 13, color: "#555", marginBottom: 12, padding: "10px", background: "#E1F5EE", borderRadius: 8 }}>
-                A IA encontrou {uploadResultados.length} lancamento(s). Revise e desmarque os que nao deseja importar.
-              </div>
-              <div style={{ maxHeight: 380, overflowY: "auto", marginBottom: 16 }}>
-                {uploadResultados.map((l, idx) => (
-                  <div key={idx} style={{ padding: "10px 12px", borderBottom: "0.5px solid #f0f0f0", opacity: l._ignorar ? 0.4 : 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                      <input type="checkbox" checked={!l._ignorar}
-                        onChange={(e) => setUploadResultados((prev) => prev.map((r, i) => i === idx ? { ...r, _ignorar: !e.target.checked } : r))}
-                        style={{ width: 16, height: 16, accentColor: "#1D9E75" }} />
-                      <span style={{ fontSize: 13, fontWeight: 500, flex: 1 }}>{l.descricao}</span>
-                      <span style={{ fontSize: 13, fontWeight: 500, color: l.tipo === "entrada" ? "#1D9E75" : "#A32D2D" }}>
-                        {l.tipo === "entrada" ? "+" : "-"}{fmtMoeda(l.valor)}
-                      </span>
-                      <span style={{ fontSize: 11, color: "#888" }}>{fmt(l.data)}</span>
-                      <span style={{ background: CONFIANCA_COLOR[l.confianca] || "#f0f0ee", color: CONFIANCA_TEXT[l.confianca] || "#555", padding: "2px 8px", borderRadius: 20, fontSize: 10 }}>{l.confianca}</span>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 26, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 12, color: "#888" }}>Categoria:</span>
-                      <select value={l.categoria_sugerida}
-                        onChange={(e) => setUploadResultados((prev) => prev.map((r, i) => i === idx ? { ...r, categoria_sugerida: e.target.value } : r))}
-                        style={{ padding: "4px 8px", borderRadius: 6, border: "0.5px solid #ccc", fontSize: 12, fontFamily: "inherit", background: "#fff" }}>
-                        {categorias.map((c) => <option key={c}>{c}</option>)}
-                      </select>
-                      {l.subcategoria_sugerida && <span style={{ fontSize: 11, color: "#888" }}>↳ {l.subcategoria_sugerida}</span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ background: "#f7f7f5", borderRadius: 8, padding: "10px 12px", marginBottom: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 500, color: "#555", marginBottom: 8 }}>Gerenciar categorias</div>
-                <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                  <input value={novaCatUpload} onChange={(e) => setNovaCatUpload(e.target.value)}
-                    placeholder="Nova categoria..." onKeyDown={(e) => e.key === "Enter" && adicionarCategoriaUpload()}
-                    style={{ flex: 1, padding: "5px 8px", borderRadius: 6, border: "0.5px solid #ccc", fontSize: 12, fontFamily: "inherit" }} />
-                  <Btn small variant="primary" onClick={adicionarCategoriaUpload}>+ Adicionar</Btn>
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {categorias.filter(c => !CATS_DEFAULT.includes(c)).map(cat => (
-                    <span key={cat} style={{ display: "flex", alignItems: "center", gap: 4, background: "#fff", border: "0.5px solid #e0e0e0", borderRadius: 20, padding: "3px 10px", fontSize: 11 }}>
-                      {cat}
-                      <button onClick={() => removerCategoriaUpload(cat)}
-                        style={{ background: "none", border: "none", cursor: "pointer", color: "#A32D2D", fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
-                    </span>
-                  ))}
-                  {categorias.filter(c => !CATS_DEFAULT.includes(c)).length === 0 && (
-                    <span style={{ fontSize: 11, color: "#aaa" }}>Nenhuma categoria personalizada ainda.</span>
-                  )}
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <Btn onClick={() => { setUploadResultados([]); setUploadFile(null); }}>Voltar</Btn>
-                <Btn variant="primary" onClick={confirmarLancamentos} disabled={loading}>{loading ? "Importando..." : "Confirmar e importar"}</Btn>
-              </div>
-            </>
-          )}
-        </Modal>
-      )}
-
-      {/* ── MODAL: Categorias ── */}
-      {modal === "categorias" && (
-        <Modal title="Gerenciar categorias financeiras" onClose={() => { setModal(null); setEditCat(null); }} width={460}>
-          <p style={{ fontSize: 12, color: "#888", marginBottom: 12, lineHeight: 1.5 }}>
-            Todas as categorias são editáveis. Clique em ✏️ para renomear ou 🗑 para remover.
-            Ao renomear, todos os lançamentos existentes são atualizados automaticamente.
-          </p>
-          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-            <input value={novaCat} onChange={(e) => setNovaCat(e.target.value)} placeholder="Nome da nova categoria..."
-              onKeyDown={(e) => e.key === "Enter" && adicionarCategoria()}
-              style={{ flex: 1, padding: "8px 10px", borderRadius: 7, border: "0.5px solid #ccc", fontSize: 13, fontFamily: "inherit" }} />
-            <Btn variant="primary" onClick={adicionarCategoria}>+ Adicionar</Btn>
-          </div>
-          <div style={{ maxHeight: 380, overflowY: "auto" }}>
-            {catObjetos.map((catObj) => {
-              const isEditing = editCat && editCat.id === catObj.id;
-              return (
-                <div key={catObj.id || catObj.nome} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "0.5px solid #f0f0f0" }}>
-                  {isEditing ? (
-                    <>
-                      <input
-                        autoFocus
-                        value={editCat.nomeNovo}
-                        onChange={(e) => setEditCat({ ...editCat, nomeNovo: e.target.value })}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") renomearCategoria(catObj.id, catObj.nome, editCat.nomeNovo);
-                          if (e.key === "Escape") setEditCat(null);
-                        }}
-                        style={{ flex: 1, padding: "5px 8px", borderRadius: 6, border: "1.5px solid #1D9E75", fontSize: 13, fontFamily: "inherit" }}
-                      />
-                      <Btn small variant="primary" onClick={() => renomearCategoria(catObj.id, catObj.nome, editCat.nomeNovo)}>Salvar</Btn>
-                      <Btn small onClick={() => setEditCat(null)}>Cancelar</Btn>
-                    </>
-                  ) : (
-                    <>
-                      <span style={{ flex: 1, fontSize: 13 }}>
-                        {catObj.nome}
-                        {CATS_DEMISSAO.includes(catObj.nome) && (
-                          <span style={{ fontSize: 10, color: "#A32D2D", marginLeft: 6, background: "#FCEBEB", padding: "1px 6px", borderRadius: 10 }}>demissão</span>
-                        )}
-                      </span>
-                      <button
-                        onClick={() => setEditCat({ id: catObj.id, nomeAntigo: catObj.nome, nomeNovo: catObj.nome })}
-                        title="Renomear"
-                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, padding: "2px 4px", color: "#555", borderRadius: 5 }}>
-                        ✏️
-                      </button>
-                      <button
-                        onClick={() => setConfirmData({
-                          title: "Remover categoria",
-                          message: `Remover a categoria "${catObj.nome}"? Os lançamentos com essa categoria ficarão sem categoria definida.`,
-                          onConfirm: () => removerCategoria(catObj.nome),
-                        })}
-                        title="Remover"
-                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, padding: "2px 4px", color: "#A32D2D", borderRadius: 5 }}>
-                        🗑
-                      </button>
-                    </>
-                  )}
-                </div>
-              );
-            })}
-            {catObjetos.length === 0 && (
-              <div style={{ padding: "1rem", textAlign: "center", fontSize: 13, color: "#aaa" }}>
-                Nenhuma categoria cadastrada.
-              </div>
-            )}
-          </div>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-            <Btn onClick={() => { setModal(null); setEditCat(null); }}>Fechar</Btn>
-          </div>
-        </Modal>
-      )}
-
-      {/* MODAL: Saldo Inicial do Ano */}
-      {!saldoInicialAno && saldoAnterior === 0 && aba === "lancamentos" && (
-        <Modal title="Registrar Saldo Inicial do Ano" onClose={() => {}} width={400}>
-          <div style={{ marginBottom: 16 }}>
-            <p style={{ fontSize: 13, color: "#555", marginBottom: 12 }}>
-              Informe o saldo em caixa no início do ano para cálculos corretos:
-            </p>
-            <div style={{ marginBottom: 12 }}>
-              <label style={{ fontSize: 12, color: "#888", fontWeight: 500, marginBottom: 6, display: "block" }}>Saldo Inicial (R$)</label>
-              <input type="number" placeholder="Ex: 20287.30" defaultValue={20287.30}
-                onChange={(e) => setSaldoInicialAno(parseFloat(e.target.value) || 0)}
-                style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "0.5px solid #ccc", fontSize: 13, fontFamily: "inherit" }} />
+      {/* Modal Despesa */}
+      {modal === "despesa" && (
+        <Modal title={editItem ? "Editar despesa" : "Nova despesa"} onClose={() => setModal(null)}>
+          <Input label="Descrição *" value={formDesp.descricao} onChange={e => {
+            const desc = e.target.value;
+            const catId = categorizarTexto(desc, regrasIA);
+            setFormDesp(f => ({ ...f, descricao: desc, categoria_id: catId ? String(catId) : f.categoria_id }));
+          }} placeholder="Ex: Compra supermercado, Conta de luz..." />
+          {formDesp.descricao && formDesp.categoria_id && (
+            <div style={{ fontSize: 12, color: "#1D9E75", marginTop: -8, marginBottom: 8 }}>
+              ✨ Categoria identificada: <strong>{categorias.find(c => c.id === parseInt(formDesp.categoria_id))?.nome}</strong>
             </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <Input label="Valor (R$) *" type="number" step="0.01" min="0" value={formDesp.valor} onChange={e => setFormDesp(f => ({ ...f, valor: e.target.value }))} />
+            <Input label="Data *" type="date" value={formDesp.data} onChange={e => setFormDesp(f => ({ ...f, data: e.target.value }))} />
           </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <Btn variant="primary" onClick={async () => {
-              const valor = saldoInicialAno || 20287.30;
-              await supabase.from("financeiro").insert({
-                descricao: "Saldo inicial do ano",
-                valor: valor,
-                tipo: "entrada",
-                categoria: "Saldo Inicial",
-                data: "2025-12-31",
-                observacao: "Saldo inicial - não contabilizado no resultado",
-                is_saldo_inicial: true
-              });
-              setSaldoInicialAno(valor);
-              carregarLancamentos();
-              showMsg("Saldo inicial registrado!");
-            }}>Confirmar</Btn>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <SelectField label="Tipo" value={formDesp.tipo} onChange={e => setFormDesp(f => ({ ...f, tipo: e.target.value }))}>
+              <option value="variavel">Variável</option>
+              <option value="fixa">Fixa</option>
+            </SelectField>
+            <SelectField label="Categoria" value={formDesp.categoria_id} onChange={e => setFormDesp(f => ({ ...f, categoria_id: e.target.value }))}>
+              <option value="">Detectar automaticamente</option>
+              {categorias.filter(c => c.tipo === "despesa" || c.tipo === "ambos").map(c => (
+                <option key={c.id} value={c.id}>{c.nome}</option>
+              ))}
+            </SelectField>
+          </div>
+          <SelectField label="Conta" value={formDesp.conta_id} onChange={e => setFormDesp(f => ({ ...f, conta_id: e.target.value }))}>
+            <option value="">Sem conta</option>
+            {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+          </SelectField>
+          <Input label="Observação" value={formDesp.observacao} onChange={e => setFormDesp(f => ({ ...f, observacao: e.target.value }))} />
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
+            <Btn onClick={() => setModal(null)}>Cancelar</Btn>
+            <Btn variant="danger" onClick={salvarDespesa} disabled={loading}>{loading ? "Salvando..." : "Salvar"}</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal Recorrência */}
+      {modal === "recorrencia" && (
+        <Modal title="Nova despesa recorrente" onClose={() => setModal(null)}>
+          <Input label="Descrição *" value={formRecorr.descricao} onChange={e => setFormRecorr(f => ({ ...f, descricao: e.target.value }))} placeholder="Ex: Conta de luz, Internet..." />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <Input label="Valor (R$) *" type="number" step="0.01" min="0" value={formRecorr.valor} onChange={e => setFormRecorr(f => ({ ...f, valor: e.target.value }))} />
+            <Input label="Dia do vencimento" type="number" min="1" max="31" value={formRecorr.dia_vencimento} onChange={e => setFormRecorr(f => ({ ...f, dia_vencimento: e.target.value }))} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <SelectField label="Categoria" value={formRecorr.categoria_id} onChange={e => setFormRecorr(f => ({ ...f, categoria_id: e.target.value }))}>
+              <option value="">Sem categoria</option>
+              {categorias.filter(c => c.tipo === "despesa" || c.tipo === "ambos").map(c => (
+                <option key={c.id} value={c.id}>{c.nome}</option>
+              ))}
+            </SelectField>
+            <SelectField label="Conta" value={formRecorr.conta_id} onChange={e => setFormRecorr(f => ({ ...f, conta_id: e.target.value }))}>
+              <option value="">Sem conta</option>
+              {contas.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </SelectField>
+          </div>
+          <AlertBar>Esta despesa será criada automaticamente todo mês no dia {formRecorr.dia_vencimento}.</AlertBar>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
+            <Btn onClick={() => setModal(null)}>Cancelar</Btn>
+            <Btn variant="primary" onClick={salvarRecorrencia} disabled={loading}>{loading ? "Criando..." : "Criar"}</Btn>
           </div>
         </Modal>
       )}
