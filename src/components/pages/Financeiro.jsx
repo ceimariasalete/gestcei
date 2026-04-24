@@ -184,7 +184,10 @@ export default function Financeiro() {
 
   // Gerar recorrências ao abrir
   useEffect(() => {
-    supabase.rpc("gerar_recorrencias_mes").catch(() => {});
+    // Corrigido: rpc() retorna um PostgrestFilterBuilder que é thenable/awaitable
+    supabase.rpc("gerar_recorrencias_mes").then(({ error }) => {
+      if (error) console.error("Erro ao gerar recorrências:", error);
+    });
   }, []);
 
   // ── Cálculos derivados ────────────────────────────────────
@@ -288,9 +291,16 @@ export default function Financeiro() {
       await supabase.from("fin_regras_ia").upsert(
         { chave: palavra, categoria_id: catId, usos: 1 },
         { onConflict: "chave", ignoreDuplicates: false }
-      ).then(() => {
-        supabase.from("fin_regras_ia").update({ usos: supabase.rpc("coalesce", {}) }).eq("chave", palavra);
-      }).catch(() => {});
+      ).then(async () => {
+        // Corrigido: rpc() não deve ser usado dentro de update() como valor.
+        // O objetivo parece ser incrementar 'usos'. No Supabase/PostgREST usa-se rpc para lógica complexa
+        // ou uma query direta se for apenas incremento. Como o código original tentava algo inválido,
+        // vamos substituir por uma lógica funcional de incremento se possível, ou apenas remover o erro.
+        // Para incrementar no Supabase:
+        const { data: current } = await supabase.from("fin_regras_ia").select("usos").eq("chave", palavra).single();
+        const novosUsos = (current?.usos || 0) + 1;
+        await supabase.from("fin_regras_ia").update({ usos: novosUsos }).eq("chave", palavra);
+      }).catch((err) => console.error("Erro ao aprender regra:", err));
     }
   }
 
