@@ -7,6 +7,7 @@ import {
   Btn, Input, SelectField, Modal, ConfirmModal,
   MetricCard, AlertBar, Msg, PageHeader, Table, EmptyRow,
 } from "../ui";
+import SeletorPeriodo from "../ui/SeletorPeriodo";
 
 // ── Utilitários ────────────────────────────────────────────────
 const hoje = () => new Date().toISOString().split("T")[0];
@@ -331,6 +332,11 @@ export default function Financeiro() {
     });
   }
 
+  // Função para atualizar período quando o seletor muda
+  function handlePeriodoChange(novoPeriodo) {
+    setPeriodo({ inicio: novoPeriodo.inicio, fim: novoPeriodo.fim });
+  }
+
   const labelPeriodo = new Date(periodo.inicio + "T12:00:00").toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 
   // ── Sub-abas ──────────────────────────────────────────────
@@ -355,9 +361,7 @@ export default function Financeiro() {
       {confirmData && <ConfirmModal {...confirmData} onCancel={() => setConfirmData(null)} />}
 
       <PageHeader title="Financeiro" subtitle="Controle completo de receitas e despesas">
-        <button onClick={() => mudarMes(-1)} style={{ padding: "6px 10px", border: "0.5px solid #ccc", borderRadius: 7, background: "#fff", cursor: "pointer", fontSize: 13 }}>‹</button>
-        <span style={{ fontSize: 13, fontWeight: 500, color: "#333", textTransform: "capitalize", minWidth: 140, textAlign: "center" }}>{labelPeriodo}</span>
-        <button onClick={() => mudarMes(1)} style={{ padding: "6px 10px", border: "0.5px solid #ccc", borderRadius: 7, background: "#fff", cursor: "pointer", fontSize: 13 }}>›</button>
+        <SeletorPeriodo onChange={handlePeriodoChange} />
         <Btn variant="primary" onClick={() => { setFormRec(formRecDefault); setEditItem(null); setModal("receita"); }}>+ Receita</Btn>
         <Btn variant="danger" onClick={() => { setFormDesp(formDespDefault); setEditItem(null); setModal("despesa"); }}>+ Despesa</Btn>
       </PageHeader>
