@@ -121,6 +121,8 @@ CREATE TABLE IF NOT EXISTS fin_receitas (
   tipo            text DEFAULT 'mensalidade',  -- mensalidade, matricula, convenio, doacao, outros
   conta_id        bigint REFERENCES fin_contas(id),
   categoria_id    bigint REFERENCES fin_categorias(id),
+  pessoa          text,
+  status          text DEFAULT 'concluido',
   referencia      text,
   observacao      text,
   is_saldo_inicial boolean DEFAULT false,
@@ -144,6 +146,8 @@ CREATE TABLE IF NOT EXISTS fin_despesas (
   conta_id        bigint REFERENCES fin_contas(id),
   categoria_id    bigint REFERENCES fin_categorias(id),
   recorrencia_id  bigint,
+  pessoa          text,
+  status          text DEFAULT 'concluido',
   observacao      text,
   usuario_id      bigint,
   usuario_nome    text,
@@ -269,3 +273,15 @@ ON CONFLICT (email) DO NOTHING;
 --   Senha: (a que você quiser)
 --   Marque "Auto Confirm" para pular a verificação de e-mail
 -- ============================================================
+
+-- ────────────────────────────────────────────────────────────
+-- 15. ATUALIZAÇÕES DO BANCO (EXECUTAR CASO O BANCO JÁ EXISTA)
+-- ────────────────────────────────────────────────────────────
+-- Se você já rodou o script acima antes, execute as linhas 
+-- abaixo para adicionar os campos de status e pessoa nas tabelas de caixa:
+-- 
+-- ALTER TABLE fin_receitas ADD COLUMN IF NOT EXISTS pessoa text;
+-- ALTER TABLE fin_receitas ADD COLUMN IF NOT EXISTS status text DEFAULT 'concluido';
+-- ALTER TABLE fin_despesas ADD COLUMN IF NOT EXISTS pessoa text;
+-- ALTER TABLE fin_despesas ADD COLUMN IF NOT EXISTS status text DEFAULT 'concluido';
+-- ────────────────────────────────────────────────────────────

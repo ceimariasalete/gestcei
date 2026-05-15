@@ -10,6 +10,7 @@ import {
 import SeletorPeriodo from "../ui/SeletorPeriodo";
 import ImportadorExtrato from "./ImportadorExtrato";
 import GerenciadorCategorias from "./GerenciadorCategorias";
+import ExportadorFinanceiro from "./ExportadorFinanceiro";
 
 // ── Utilitários ────────────────────────────────────────────────
 const hoje = () => new Date().toISOString().split("T")[0];
@@ -379,6 +380,7 @@ export default function Financeiro() {
 
       <PageHeader title="Financeiro" subtitle="Controle completo de receitas e despesas">
         <SeletorPeriodo onChange={handlePeriodoChange} />
+        <Btn onClick={() => setModal("exportar")}>📤 Exportar</Btn>
         <Btn onClick={() => setModal("categorias")}>Categorias</Btn>
         <Btn onClick={() => setModal("importar")}>Importar Extrato</Btn>
         <Btn variant="primary" onClick={() => { setFormRec(formRecDefault); setEditItem(null); setModal("receita"); }}>+ Receita</Btn>
@@ -805,6 +807,11 @@ export default function Financeiro() {
       {/* Modal Gerenciador Categorias */}
       {modal === "categorias" && (
         <GerenciadorCategorias onClose={() => setModal(null)} onUpdate={carregar} />
+      )}
+
+      {/* Modal Exportador Financeiro */}
+      {modal === "exportar" && (
+        <ExportadorFinanceiro onClose={() => setModal(null)} />
       )}
     </div>
   );
