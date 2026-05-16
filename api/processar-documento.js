@@ -37,7 +37,7 @@ REGRAS ABSOLUTAS:
   const prompt = `Hoje é ${hoje}. Analise o documento financeiro e extraia todos os lançamentos.
 
 ══════════════════════════════════════════
-📋 LEITURA DE EXTRATO SICOOB
+LEITURA DE EXTRATO SICOOB
 ══════════════════════════════════════════
 Colunas: DATA | HISTÓRICO | VALOR
 • Datas: DD/MM (DIA/MÊS) — o ANO está no cabeçalho (campo PERÍODO)
@@ -48,18 +48,18 @@ Colunas: DATA | HISTÓRICO | VALOR
 • ATENÇÃO: Se a sequência de datas pular de 28/02 para 01/03, o mês mudou para MARÇO. Não confunda 02/03 (2 de Março) com 03/02 (3 de Fevereiro).
 
 ══════════════════════════════════════════
-🧠 MEMÓRIA DE CATEGORIAS (regras aprendidas)
+MEMÓRIA DE CATEGORIAS (regras aprendidas)
 ══════════════════════════════════════════
 Estas regras são baseadas no histórico real desta instituição — priorize-as:
 ${regrasTxt}
 
 ══════════════════════════════════════════
-📂 CATEGORIAS DISPONÍVEIS
+CATEGORIAS DISPONÍVEIS
 ══════════════════════════════════════════
 ${catsTxt}
 
 ══════════════════════════════════════════
-🗂️ GUIA DE CATEGORIZAÇÃO PARA CEI
+GUIA DE CATEGORIZAÇÃO PARA CEI
 ══════════════════════════════════════════
 ALIMENTAÇÃO:
   → Supermercado, atacado, açougue, mercearia, hortifruti, laticínios, grãos, frios
@@ -129,7 +129,7 @@ OUTROS:
   → Não se encaixa em nenhuma das categorias acima
 
 ══════════════════════════════════════════
-🔑 REGRA: fornecedor_chave
+REGRA: fornecedor_chave
 ══════════════════════════════════════════
 • Extraia 2-4 palavras que identificam unicamente o fornecedor/empresa
 • Remova: datas, valores, números de documento, CPF/CNPJ, cidade/estado
@@ -139,14 +139,14 @@ OUTROS:
 • Deixe "" se o fornecedor for uma pessoa física não identificável
 
 ══════════════════════════════════════════
-📊 CONFIANÇA DA CATEGORIZAÇÃO
+CONFIANÇA DA CATEGORIZAÇÃO
 ══════════════════════════════════════════
 • "alta": nome do fornecedor está nas regras aprendidas OU é inequívoco (CELESC→energia)
 • "media": nome sugere categoria mas há ambiguidade
 • "baixa": suposição — categoria mais provável mas incerta
 
 ══════════════════════════════════════════
-📤 FORMATO DE SAÍDA (JSON APENAS)
+FORMATO DE SAÍDA (JSON APENAS)
 ══════════════════════════════════════════
 {
   "lancamentos": [

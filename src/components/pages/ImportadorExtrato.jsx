@@ -41,25 +41,32 @@ export default function ImportadorExtrato({ onClose, onImportSuccess }) {
     const file = e.target.files[0];
     if (file) {
       setSelectedFile(file);
-      setLoading(true);
-      try {
-        const base64 = await fileToBase64(file);
-        setFileBase64(base64);
-        
-        const data = await processarDocumentoIA(file, categorias, []);
-        const extraidos = Array.isArray(data) ? data : (data?.transacoes || data?.lancamentos || []);
-        
-        setLancamentosEditaveis(extraidos.map(l => ({
-          ...l,
-          conta_id: contaSelecionada || "", 
-          categoria_id: categorias.find(c => c.nome === l.categoria_sugerida)?.id || ""
-        })));
-        
-      } catch (error) {
-        showMsg("Erro ao processar o arquivo via IA.");
-      } finally {
-        setLoading(false);
-      }
+      setFileBase64(null); // Resetar processamento anterior se houver
+      setLancamentosEditaveis([]);
+    }
+  };
+
+  const handleProcessar = async () => {
+    if (!selectedFile) return showMsg("Selecione um arquivo primeiro.");
+    setLoading(true);
+    try {
+      const base64 = await fileToBase64(selectedFile);
+      setFileBase64(base64);
+      
+      const data = await processarDocumentoIA(selectedFile, categorias, []);
+      const extraidos = Array.isArray(data) ? data : (data?.transacoes || data?.lancamentos || []);
+      
+      setLancamentosEditaveis(extraidos.map(l => ({
+        ...l,
+        conta_id: contaSelecionada || "", 
+        categoria_id: categorias.find(c => c.nome === l.categoria_sugerida)?.id || "",
+        selected: true // Padrão: todos selecionados
+      })));
+      
+    } catch (error) {
+      showMsg("Erro ao processar o arquivo via IA: " + error.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -71,6 +78,33 @@ export default function ImportadorExtrato({ onClose, onImportSuccess }) {
     const novos = [...lancamentosEditaveis];
     novos[index][field] = value;
     setLancamentosEditaveis(novos);
+  };
+
+  const handleToggleSelect = (index) => {
+    const novos = [...lancamentosEditaveis];
+    novos[index].selected = !novos[index].selected;
+    setLancamentosEditaveis(novos);
+  };
+
+  const handleToggleSelectAll = (e) => {
+    const isChecked = e.target.checked;
+    setLancamentosEditaveis(prev => prev.map(l => ({ ...l, selected: isChecked })));
+  };
+
+  const handleAddManual = () => {
+    const dataHoje = new Date().toISOString().split('T')[0];
+    setLancamentosEditaveis([
+      ...lancamentosEditaveis,
+      {
+        data: dataHoje,
+        descricao: '',
+        valor: '',
+        tipo: 'despesa',
+        categoria_id: '',
+        conta_id: contaSelecionada || '',
+        selected: true
+      }
+    ]);
   };
 
   const handleRemove = (index) => {
@@ -87,21 +121,23 @@ export default function ImportadorExtrato({ onClose, onImportSuccess }) {
   };
 
   const importarSelecionados = async () => {
-    if (lancamentosEditaveis.length === 0) return showMsg("Nenhum lançamento para importar.");
+    const itensParaImportar = lancamentosEditaveis.filter(l => l.selected);
+    
+    if (itensParaImportar.length === 0) return showMsg("Nenhum lançamento selecionado para importar.");
     
     // Validação estrita
-    for (let i = 0; i < lancamentosEditaveis.length; i++) {
-      const l = lancamentosEditaveis[i];
-      if (!l.descricao || !l.descricao.trim()) return showMsg(`A linha ${i + 1} está sem descrição.`);
-      if (!l.data) return showMsg(`A linha ${i + 1} está sem data.`);
+    for (let i = 0; i < itensParaImportar.length; i++) {
+      const l = itensParaImportar[i];
+      if (!l.descricao || !l.descricao.trim()) return showMsg(`O lançamento ${i + 1} selecionado está sem descrição.`);
+      if (!l.data) return showMsg(`O lançamento ${i + 1} selecionado está sem data.`);
       const val = parseFloat(l.valor);
-      if (isNaN(val) || val <= 0) return showMsg(`A linha ${i + 1} possui valor inválido.`);
+      if (isNaN(val) || val <= 0) return showMsg(`O lançamento ${i + 1} selecionado possui valor inválido.`);
     }
 
     setImportando(true);
     let sucessoCount = 0;
 
-    for (const l of lancamentosEditaveis) {
+    for (const l of itensParaImportar) {
       const payload = {
         descricao: l.descricao,
         valor: parseFloat(l.valor) || 0,
@@ -160,12 +196,23 @@ export default function ImportadorExtrato({ onClose, onImportSuccess }) {
           />
           
           <Btn variant="primary" onClick={handleSelectClick} disabled={loading || importando}>
-            {loading ? "Processando IA..." : "Selecionar Arquivo"}
+            {selectedFile ? "Trocar Arquivo" : "Selecionar Arquivo"}
           </Btn>
 
-          {selectedFile && !loading && (
+          {selectedFile && !loading && lancamentosEditaveis.length === 0 && (
+            <>
+              <div style={{ fontSize: 13, color: '#1D9E75', background: '#E1F5EE', padding: '6px 12px', borderRadius: 8 }}>
+                Arquivo selecionado: <strong>{selectedFile.name}</strong>
+              </div>
+              <Btn variant="primary" onClick={handleProcessar} disabled={loading || importando}>
+                Processar Documento
+              </Btn>
+            </>
+          )}
+
+          {selectedFile && !loading && lancamentosEditaveis.length > 0 && (
             <div style={{ fontSize: 13, color: '#1D9E75', background: '#E1F5EE', padding: '6px 12px', borderRadius: 8 }}>
-              📄 Arquivo processado: <strong>{selectedFile.name}</strong>
+              Arquivo processado: <strong>{selectedFile.name}</strong>
             </div>
           )}
           
@@ -200,6 +247,13 @@ export default function ImportadorExtrato({ onClose, onImportSuccess }) {
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                 <thead>
                   <tr style={{ background: '#f5f5f5', borderBottom: '1px solid #e0e0e0', fontSize: 12, color: '#666' }}>
+                    <th style={{ padding: '8px', width: 30, textAlign: 'center' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={lancamentosEditaveis.length > 0 && lancamentosEditaveis.every(l => l.selected)}
+                        onChange={handleToggleSelectAll}
+                      />
+                    </th>
                     <th style={{ padding: '8px', fontWeight: 600 }}>Data</th>
                     <th style={{ padding: '8px', fontWeight: 600 }}>Descrição</th>
                     <th style={{ padding: '8px', fontWeight: 600 }}>Valor</th>
@@ -211,7 +265,14 @@ export default function ImportadorExtrato({ onClose, onImportSuccess }) {
                 </thead>
                 <tbody>
                   {lancamentosEditaveis.map((l, i) => (
-                    <tr key={i} style={{ borderBottom: "0.5px solid #f0f0f0" }}>
+                    <tr key={i} style={{ borderBottom: "0.5px solid #f0f0f0", opacity: l.selected ? 1 : 0.5 }}>
+                      <td style={{ padding: "8px", textAlign: 'center' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={!!l.selected} 
+                          onChange={() => handleToggleSelect(i)} 
+                        />
+                      </td>
                       <td style={{ padding: "8px" }}>
                         <input type="date" value={l.data} onChange={e => handleEdit(i, 'data', e.target.value)} style={{ width: 110, fontSize: 12, padding: 4, border: '1px solid #ccc', borderRadius: 4 }} />
                       </td>
@@ -246,9 +307,13 @@ export default function ImportadorExtrato({ onClose, onImportSuccess }) {
                       </td>
                     </tr>
                   ))}
-                  {lancamentosEditaveis.length === 0 && <EmptyRow colSpan={7} message="Todos os lançamentos foram removidos." />}
+                  {lancamentosEditaveis.length === 0 && <EmptyRow colSpan={8} message="Todos os lançamentos foram removidos." />}
                 </tbody>
               </table>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <Btn small onClick={handleAddManual}>+ Adicionar Lançamento Manual</Btn>
             </div>
           </div>
         )}
@@ -257,7 +322,7 @@ export default function ImportadorExtrato({ onClose, onImportSuccess }) {
         <Btn onClick={onClose} disabled={importando}>Cancelar</Btn>
         {lancamentosEditaveis.length > 0 && !loading && (
           <Btn variant="primary" onClick={importarSelecionados} disabled={importando}>
-            {importando ? "Importando..." : `Importar Selecionados (${lancamentosEditaveis.length})`}
+            {importando ? "Importando..." : `Importar Selecionados (${lancamentosEditaveis.filter(l => l.selected).length})`}
           </Btn>
         )}
       </div>

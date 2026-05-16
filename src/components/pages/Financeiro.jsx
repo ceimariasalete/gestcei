@@ -380,9 +380,11 @@ export default function Financeiro() {
 
       <PageHeader title="Financeiro" subtitle="Controle completo de receitas e despesas">
         <SeletorPeriodo onChange={handlePeriodoChange} />
-        <Btn onClick={() => setModal("exportar")}>📤 Exportar</Btn>
+        <div style={{ display: "flex", gap: 8, background: "#f5f5f5", padding: 4, borderRadius: 8 }}>
+          <Btn onClick={() => setModal("exportar")}>Exportar</Btn>
+          <Btn onClick={() => setModal("importar")}>Importar Extrato</Btn>
+        </div>
         <Btn onClick={() => setModal("categorias")}>Categorias</Btn>
-        <Btn onClick={() => setModal("importar")}>Importar Extrato</Btn>
         <Btn variant="primary" onClick={() => { setFormRec(formRecDefault); setEditItem(null); setModal("receita"); }}>+ Receita</Btn>
         <Btn variant="danger" onClick={() => { setFormDesp(formDespDefault); setEditItem(null); setModal("despesa"); }}>+ Despesa</Btn>
       </PageHeader>
@@ -550,7 +552,7 @@ export default function Financeiro() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
           {/* Inputs */}
           <div style={S.card}>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>🧮 Parâmetros</div>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>Parâmetros</div>
             {[
               { key: "alunos",   label: "Total de alunos",          min: 1,  max: 500, step: 1  },
               { key: "custos",   label: "Custos mensais totais (R$)", min: 0,  max: 999999, step: 100 },
@@ -653,7 +655,7 @@ export default function Financeiro() {
               <div key={c.id} style={{ ...S.card, borderLeft: `4px solid ${saldo >= 0 ? "#1D9E75" : "#E74C3C"}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                   <div style={{ fontSize: 14, fontWeight: 600 }}>
-                    {{banco: "🏦", caixa: "💵", pix: "📲", investimento: "📈"}[c.tipo]} {c.nome}
+                    {{banco: "Banco", caixa: "Caixa Físico", pix: "PIX", investimento: "Investimento"}[c.tipo]} - {c.nome}
                   </div>
                   <Btn small onClick={() => { setFormConta({ id: c.id, saldo_inicial: c.saldo_inicial }); setModal("conta_saldo"); }}>
                     Editar Saldo
@@ -734,7 +736,7 @@ export default function Financeiro() {
           }} placeholder="Ex: Compra supermercado, Conta de luz..." />
           {formDesp.descricao && formDesp.categoria_id && (
             <div style={{ fontSize: 12, color: "#1D9E75", marginTop: -8, marginBottom: 8 }}>
-              ✨ Categoria identificada: <strong>{categorias.find(c => c.id === parseInt(formDesp.categoria_id))?.nome}</strong>
+              Categoria identificada: <strong>{categorias.find(c => c.id === parseInt(formDesp.categoria_id))?.nome}</strong>
             </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>

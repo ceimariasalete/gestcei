@@ -309,7 +309,7 @@ export default function ExportadorFinanceiro({ onClose }) {
   }
 
   return (
-    <Modal title="📤 Exportar Relatório Financeiro" onClose={onClose}>
+    <Modal title="Exportar Relatório Financeiro" onClose={onClose}>
       <Msg text={msg} />
       
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
