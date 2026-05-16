@@ -7,6 +7,9 @@ import path from 'path'
 const vercelApiPlugin = () => ({
   name: 'vercel-api-plugin',
   configureServer(server) {
+    const env = loadEnv(server.config.mode, process.cwd(), '');
+    Object.assign(process.env, env);
+
     server.middlewares.use(async (req, res, next) => {
       if (req.url.startsWith('/api/')) {
         try {
@@ -56,12 +59,8 @@ const vercelApiPlugin = () => ({
   }
 });
 
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
-  Object.assign(process.env, env)
-
-  return {
-    plugins: [
+export default defineConfig({
+  plugins: [
     react(),
     vercelApiPlugin()
   ],
