@@ -105,6 +105,7 @@ export default function ImportadorExtrato({ onClose, onImportSuccess }) {
 
       setLancamentosEditaveis(extraidos.map(l => ({
         ...l,
+        tipo: (l.tipo === 'entrada' || l.tipo === 'receita' || l.tipo === 'C') ? 'receita' : 'despesa',
         conta_id: contaSelecionada || '',
         categoria_id: encontrarCategoriaId(l.categoria_sugerida),
         selected: true,
