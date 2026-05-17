@@ -43,58 +43,7 @@ export const MERCHANTS_SEED = {
   'CASAN':               'Água',
 };
 
-// ─── Regras por palavras-chave ──────────────────────────────────────────────
-const REGRAS_KEYWORDS = {
-  'Salário & Pró-Labore': [
-    'SALARIO','SALÁRIO','CREDITO SALARIO','CREDITO SALÁRIO','CRED SALARIO',
-    'HOLERITE','FOLHA','ADIANTAMENTO SALARIO','PRO-LABORE','PROLABORE',
-    '13 SALARIO','FERIAS PROPORCIONAIS','RESCISAO','AVISO PREVIO',
-  ],
-  'Água': ['SAMAE', 'CASAN', 'CONTA AGUA', 'AGUA E ESGOTO', 'SANEAMENTO'],
-  'Luz': ['CELESC', 'COPEL', 'LIGHT', 'ENERGIA ELETRICA', 'CONTA DE LUZ'],
-  'Internet & Telefone': ['TELEFONE', 'INTERNET', 'VIVO', 'CLARO', 'TIM', 'PROVEDOR'],
-  'Impostos & Taxas': [
-    'TRIBUTARIO','TRIBUTO','IPTU','ISSQN','SIMPLES NACIONAL','DARF',
-    'RECEITA FEDERAL','PGFN','INSS AUTONOMO','TAXA',
-  ],
-  'Mercado': [
-    'KOMPRAO','SUPERMERCADO','ATACADO','ATACADAO','ANGELONI','BISTEK',
-    'COMPER','GIASSI','SAO BRAZ','CARREFOUR','BIG','EXTRA','ASSAI',
-    'FORT ATACADISTA',
-  ],
-  'Manutenção': [
-    'CONSTRUCAO','MATERIAIS','TINTAS','FERRAGENS','MADEIREIRA','ELETRICA',
-    'HIDRAULICA','MANUTENCAO','CONSERTO','REFORMA','PINTURA','CASA MIL',
-  ],
-  'Educação & Material': [
-    'PEDAGOGICO','CURSO','CAPACITACAO','TREINAMENTO','EDUCACAO',
-    'DIDATICO','ESCOLAR','LIVRO','BRINQUEDO','FORMACAO',
-    'MATERIAL ESCOLAR','APOSTILA','UNIFORME ESCOLAR','PAPELARIA',
-  ],
-  'Limpeza & Higiene': [
-    'ECOXAXIM','LIMPEZA','HIGIENE','DESCARTAVEL','SABAO','DETERGENTE',
-    'DESINFETANTE','SUPERCLEAN','RODO','VASSOURA',
-  ],
-  'Alimentação': ['PADARIA', 'RESTAURANTE', 'LANCHONETE', 'IFOOD', 'MARMITA', 'ACOUGUE'],
-  'Cartão de Crédito': [
-    'VISA ELECTRO','COMP VISA','COMP MASTER','MASTERCARD DEBITO',
-    'FATURA CARTAO','SICOOB CARD','CREDITO CARTAO','DEBITO CARTAO',
-    'NUBANK','INTER CARD','ITAUCARD','BRADESCO CARD',
-  ],
-  'Investimentos': [
-    'RDC','APLICACAO EM RDC','RESGATE RDC','APLICACAO AUTOMATICA',
-    'RESGATE AUTOMATICO','CDB','LCI','LCA','POUPANCA',
-    'FUNDO DE INVEST','RENDA FIXA','APLICACAO FINANCEIRA',
-  ],
-  'Transferência Própria': [
-    'CONTA PROPRIA','TRANSF PROPRIA','ENTRE CONTAS','CONTA CORRENTE PROPRIA',
-  ],
-  'Receitas': [
-    'MUNICIPIO DE JOINVILLE', 'PREFEITURA DE JOINVILLE', 'PMJ', 'FAS JOINVILLE',
-    'MENSALIDADE','MATRÍCULA','CONVENIO','REPASSE PREFEITURA',
-    'CRED TED','CRED.TED','CRÉD.TED','CREDITO CONVENIO',
-  ],
-};
+// (Regras de palavras-chave removidas - sistema usará apenas memória histórica)
 
 // ─── Padrões SICOOB de código de transação (máxima precisão) ───────────────
 const PADROES_SICOOB = [
@@ -191,31 +140,7 @@ export function categorizarPorSeed(descLimpa) {
   return null;
 }
 
-// ─── Categorizar por palavras-chave ──────────────────────────────────────
-export function categorizarPorRegras(descLimpa) {
-  const upper = descLimpa.toUpperCase();
-  for (const [cat, keywords] of Object.entries(REGRAS_KEYWORDS)) {
-    for (const kw of keywords) {
-      if (upper.includes(kw.toUpperCase())) {
-        const merchant = extrairMerchant(descLimpa);
-        return { categoria: cat, merchant, origem: 'regra', confianca: 0.85 };
-      }
-    }
-  }
-  return null;
-}
-
-// ─── Heurística por valor ─────────────────────────────────────────────────
-export function categorizarPorValor(valor, tipo) {
-  const v = Math.abs(parseFloat(valor) || 0);
-  if (tipo === 'saida' && v >= 800) {
-    return { categoria: 'SALÁRIOS & PRÓ-LABORE', merchant: '', origem: 'heuristica_valor', confianca: 0.55 };
-  }
-  if (tipo === 'saida' && v < 300) {
-    return { categoria: 'FORNECEDORES & SERVIÇOS', merchant: '', origem: 'heuristica_valor', confianca: 0.45 };
-  }
-  return null;
-}
+// (Funções de categorização baseadas em heurísticas removidas para forçar aprendizado estrito)
 
 // ─── Validar categoria contra whitelist ──────────────────────────────────
 export function validarCategoria(cat) {
@@ -232,7 +157,7 @@ export function validarCategoria(cat) {
   return 'OUTROS';
 }
 
-// ─── Pipeline completo (sem IA) ───────────────────────────────────────────
+// ─── Pipeline completo (sem IA de 'chute') ──────────────────────────────────
 export function categorizarTransacao({ descricao, tipo, valor }) {
   const descricaoOriginal = descricao || '';
 
@@ -248,27 +173,15 @@ export function categorizarTransacao({ descricao, tipo, valor }) {
 
   // 3. Descrição vazia após limpeza
   if (!descLimpa) {
-    return { categoria: 'OUTROS', merchant: '', origem: 'desc_vazia', confianca: 1.0, descricao_original: descricaoOriginal, descricao_limpa: '' };
+    return { categoria: 'Outros', merchant: '', origem: 'desc_vazia', confianca: 1.0, descricao_original: descricaoOriginal, descricao_limpa: '' };
   }
 
-  // 4. Merchant seed (histórico pré-carregado)
+  // 4. Merchant seed (histórico pré-carregado / memória)
   const porSeed = categorizarPorSeed(descLimpa);
   if (porSeed) {
     return { ...porSeed, descricao_original: descricaoOriginal, descricao_limpa: descLimpa };
   }
 
-  // 5. Regras de palavras-chave
-  const porRegra = categorizarPorRegras(descLimpa);
-  if (porRegra) {
-    return { ...porRegra, descricao_original: descricaoOriginal, descricao_limpa: descLimpa };
-  }
-
-  // 6. Heurística por valor (baixa confiança)
-  const porValor = categorizarPorValor(valor, tipo);
-  if (porValor) {
-    return { ...porValor, merchant, descricao_original: descricaoOriginal, descricao_limpa: descLimpa };
-  }
-
-  // 7. Fallback final
-  return { categoria: 'OUTROS', merchant, origem: 'fallback', confianca: 0.3, descricao_original: descricaoOriginal, descricao_limpa: descLimpa };
+  // 5. Fallback final: Deixa em Outros para forçar o aprendizado manual
+  return { categoria: 'Outros', merchant, origem: 'fallback', confianca: 0.1, descricao_original: descricaoOriginal, descricao_limpa: descLimpa };
 }

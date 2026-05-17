@@ -239,10 +239,10 @@ export default function ImportadorExtrato({ onClose, onImportSuccess }) {
       <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
           <p style={{ fontSize: 14, color: '#666', textAlign: 'center' }}>
-            Selecione um extrato bancário (PDF ou imagem) para processamento.
+            Selecione um extrato bancário (PDF, Excel ou Imagem) para processamento.
           </p>
 
-          <input type="file" ref={fileInputRef} accept=".pdf,image/*"
+          <input type="file" ref={fileInputRef} accept=".pdf,image/*,.xlsx,.xls,.xlsm"
             style={{ display: 'none' }} onChange={handleFileChange} />
 
           <Btn variant="primary" onClick={() => fileInputRef.current?.click()} disabled={loading || importando}>

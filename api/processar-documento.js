@@ -7,61 +7,7 @@ import {
 
 export const config = { maxDuration: 60 };
 
-// ─── Categorizar via IA (fallback final, barato) ──────────────────────────
-async function categorizarComIA(descricao, apiKey) {
-  const prompt = `Você é um sistema de categorização financeira para um Centro de Educação Infantil.
-
-Classifique esta transação bancária em UMA das categorias abaixo. Retorne APENAS JSON válido.
-
-CATEGORIAS:
-- SALÁRIOS & PRÓ-LABORE
-- FORNECEDORES & SERVIÇOS
-- UTILIDADES PÚBLICAS
-- EDUCAÇÃO & DESENVOLVIMENTO
-- PESSOAL & MANUTENÇÃO
-- PAGAMENTOS DE CARTÃO
-- INVESTIMENTOS
-- TRANSFERÊNCIAS INTERNAS
-- RECEITAS & TRANSFERÊNCIAS RECEBIDAS
-- OUTROS
-
-Transação: "${descricao}"
-
-Retorne APENAS:
-{"categoria": "NOME_DA_CATEGORIA", "confianca": 0.85, "merchant": "nome_estabelecimento"}`;
-
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 150,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-
-  const data = await resp.json();
-  if (data.error) return null;
-
-  const text = (data.content || []).map(c => c.text || '').join('');
-  try {
-    const match = text.match(/\{[\s\S]*?\}/);
-    if (match) {
-      const parsed = JSON.parse(match[0]);
-      return {
-        categoria: validarCategoria(parsed.categoria),
-        merchant: parsed.merchant || '',
-        confianca: parsed.confianca || 0.6,
-        origem: 'ia',
-      };
-    }
-  } catch (_) {}
-  return null;
-}
+// IA Fallback removido para forçar aprendizado manual via banco de dados
 
 // ─── Consultar histórico de merchants no Supabase ────────────────────────
 async function consultarHistoricoMerchant(descLimpa, supabaseUrl, supabaseKey) {
@@ -109,8 +55,37 @@ export default async function handler(req, res) {
                 mimeType?.toLowerCase().includes('pdf') || 
                 ext === 'pdf';
 
+  const isExcel = ext === 'xlsx' || ext === 'xls' || ext === 'xlsm' || mimeType?.includes('spreadsheetml') || mimeType?.includes('excel');
+
   let fileContent;
-  if (isPDF) {
+  if (isExcel) {
+    try {
+      const ExcelJS = (await import('exceljs')).default;
+      const buffer = Buffer.from(fileBase64, 'base64');
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer);
+      const worksheet = workbook.worksheets[0];
+      
+      let csvData = '';
+      worksheet.eachRow((row) => {
+        const rowValues = Array.isArray(row.values) ? row.values.slice(1).map(v => {
+          if (typeof v === 'object' && v !== null) {
+            if (v instanceof Date) return v.toISOString().split('T')[0];
+            return v.result || v.text || '';
+          }
+          return v || '';
+        }) : [];
+        csvData += rowValues.join(';') + '\\n';
+      });
+      
+      fileContent = {
+        type: 'text',
+        text: \`DADOS DA PLANILHA EXCEL:\\n\\n\${csvData.substring(0, 50000)}\`
+      };
+    } catch (e) {
+      return res.status(500).json({ error: 'Erro ao processar arquivo Excel: ' + e.message });
+    }
+  } else if (isPDF) {
     fileContent = {
       type: 'document',
       source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 }
@@ -275,33 +250,16 @@ FORMATO JSON (responda APENAS com este JSON):
           }
         }
 
-        // 2d. IA fallback (categorização separada, barata)
-        const iaResult = await categorizarComIA(descricaoOriginal, ANTHROPIC_KEY);
-        if (iaResult) {
-          return {
-            ...l,
-            categoria_sugerida: iaResult.categoria,
-            fornecedor_chave: l.fornecedor_chave || iaResult.merchant || '',
-            confianca: iaResult.confianca >= 0.8 ? 'alta' : 'media',
-            _descricao_original: descricaoOriginal,
-            _descricao_limpa: normalizarDescricao(descricaoOriginal),
-            _merchant_detectado: iaResult.merchant,
-            _origem_categorizacao: 'ia',
-            _score_confianca: iaResult.confianca,
-          };
-        }
-
-        // 2e. Usar resultado do motor de regras (mesmo com baixa confiança) + validar
-        const catFinal = validarCategoria(resultRegra.categoria || l.categoria_sugerida);
+        // 2d. Fallback final (força o usuário a categorizar manualmente para ensinar o banco)
         return {
           ...l,
-          categoria_sugerida: catFinal,
+          categoria_sugerida: 'Outros',
           confianca: 'baixa',
           _descricao_original: descricaoOriginal,
-          _descricao_limpa: resultRegra.descricao_limpa || '',
+          _descricao_limpa: resultRegra.descricao_limpa || descricaoOriginal,
           _merchant_detectado: resultRegra.merchant || l.fornecedor_chave || '',
-          _origem_categorizacao: resultRegra.origem || 'fallback',
-          _score_confianca: resultRegra.confianca || 0.3,
+          _origem_categorizacao: 'fallback',
+          _score_confianca: 0.1,
         };
       })
     );
