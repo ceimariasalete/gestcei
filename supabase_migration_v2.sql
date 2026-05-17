@@ -13,16 +13,11 @@ CREATE TABLE IF NOT EXISTS fin_merchant_memory (
   updated_at      timestamptz DEFAULT now()
 );
 
-ALTER TABLE fin_merchant_memory ENABLE ROW LEVEL SECURITY;
+-- Desabilitar RLS para evitar problemas de permissões no lookup global de merchants
+ALTER TABLE fin_merchant_memory DISABLE ROW LEVEL SECURITY;
 
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename='fin_merchant_memory' AND policyname='Permitir tudo fin_merchant_memory'
-  ) THEN
-    CREATE POLICY "Permitir tudo fin_merchant_memory"
-      ON fin_merchant_memory FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-END $$;
+-- Garantir todas as permissões de leitura/escrita para as roles do Supabase
+GRANT ALL ON TABLE fin_merchant_memory TO anon, authenticated, service_role;
 
 CREATE INDEX IF NOT EXISTS idx_merchant_memory_name ON fin_merchant_memory (normalized_name);
 

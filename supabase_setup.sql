@@ -304,9 +304,11 @@ CREATE TABLE IF NOT EXISTS fin_merchant_memory (
   updated_at      timestamptz DEFAULT now()
 );
 
-ALTER TABLE fin_merchant_memory ENABLE ROW LEVEL SECURITY;
-CREATE POLICY IF NOT EXISTS "Permitir tudo fin_merchant_memory"
-  ON fin_merchant_memory FOR ALL USING (true) WITH CHECK (true);
+-- Desabilitar RLS para evitar problemas de permissões no lookup global de merchants
+ALTER TABLE fin_merchant_memory DISABLE ROW LEVEL SECURITY;
+
+-- Garantir todas as permissões de leitura/escrita para as roles do Supabase
+GRANT ALL ON TABLE fin_merchant_memory TO anon, authenticated, service_role;
 
 -- Índice para busca por nome
 CREATE INDEX IF NOT EXISTS idx_merchant_memory_name ON fin_merchant_memory (normalized_name);
