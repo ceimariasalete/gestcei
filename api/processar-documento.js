@@ -1,231 +1,295 @@
+import {
+  categorizarTransacao,
+  validarCategoria,
+  CATEGORIAS_VALIDAS,
+  normalizarDescricao,
+} from './categorizar-transacao.js';
+
 export const config = { maxDuration: 60 };
 
+// ─── Categorizar via IA (fallback final, barato) ──────────────────────────
+async function categorizarComIA(descricao, apiKey) {
+  const prompt = `Você é um sistema de categorização financeira para um Centro de Educação Infantil.
+
+Classifique esta transação bancária em UMA das categorias abaixo. Retorne APENAS JSON válido.
+
+CATEGORIAS:
+- SALÁRIOS & PRÓ-LABORE
+- FORNECEDORES & SERVIÇOS
+- UTILIDADES PÚBLICAS
+- EDUCAÇÃO & DESENVOLVIMENTO
+- PESSOAL & MANUTENÇÃO
+- PAGAMENTOS DE CARTÃO
+- INVESTIMENTOS
+- TRANSFERÊNCIAS INTERNAS
+- RECEITAS & TRANSFERÊNCIAS RECEBIDAS
+- OUTROS
+
+Transação: "${descricao}"
+
+Retorne APENAS:
+{"categoria": "NOME_DA_CATEGORIA", "confianca": 0.85, "merchant": "nome_estabelecimento"}`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 150,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+
+  const data = await resp.json();
+  if (data.error) return null;
+
+  const text = (data.content || []).map(c => c.text || '').join('');
+  try {
+    const match = text.match(/\{[\s\S]*?\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]);
+      return {
+        categoria: validarCategoria(parsed.categoria),
+        merchant: parsed.merchant || '',
+        confianca: parsed.confianca || 0.6,
+        origem: 'ia',
+      };
+    }
+  } catch (_) {}
+  return null;
+}
+
+// ─── Consultar histórico de merchants no Supabase ────────────────────────
+async function consultarHistoricoMerchant(descLimpa, supabaseUrl, supabaseKey) {
+  if (!descLimpa) return null;
+  try {
+    const palavrasChave = descLimpa.split(' ').filter(p => p.length > 3).slice(0, 2);
+    if (palavrasChave.length === 0) return null;
+
+    for (const palavra of palavrasChave) {
+      const url = `${supabaseUrl}/rest/v1/fin_merchant_memory?normalized_name=ilike.*${encodeURIComponent(palavra)}*&order=confidence.desc&limit=1`;
+      const res = await fetch(url, {
+        headers: {
+          'apikey': supabaseKey,
+          'Authorization': `Bearer ${supabaseKey}`,
+        },
+      });
+      if (!res.ok) continue;
+      const rows = await res.json();
+      if (rows && rows.length > 0) {
+        return {
+          categoria: validarCategoria(rows[0].category),
+          merchant: rows[0].normalized_name,
+          confianca: parseFloat(rows[0].confidence) || 0.9,
+          origem: 'historico_db',
+        };
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Método não permitido" });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Método não permitido' });
 
-  const { fileBase64, mimeType, categorias, regras } = req.body;
-  if (!fileBase64 || !mimeType) return res.status(400).json({ error: "Arquivo obrigatório" });
+  const { fileBase64, mimeType } = req.body;
+  if (!fileBase64 || !mimeType) return res.status(400).json({ error: 'Arquivo obrigatório' });
 
-  const regrasTxt = Object.entries(regras || {})
-    .map(([k, v]) => `  • "${k}" → ${v}`)
-    .join("\n") || "  (nenhuma regra aprendida ainda)";
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  const SUPABASE_URL  = process.env.VITE_SUPABASE_URL;
+  const SUPABASE_KEY  = process.env.VITE_SUPABASE_ANON_KEY;
 
-  const catsTxt = (categorias || []).join(" | ");
-  const isPDF = mimeType === "application/pdf";
-
+  const isPDF = mimeType === 'application/pdf';
   const fileContent = isPDF
-    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: fileBase64 } }
-    : { type: "image",    source: { type: "base64", media_type: mimeType, data: fileBase64 } };
+    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
+    : { type: 'image', source: { type: 'base64', media_type: mimeType, data: fileBase64 } };
 
-  const hoje = new Date().toISOString().split("T")[0];
+  const hoje = new Date().toISOString().split('T')[0];
 
-  const systemPrompt = `Você é o assistente financeiro do GestCEI — Centro de Educação Infantil em Joinville/SC.
-Sua especialidade é extrair lançamentos financeiros de documentos com máxima precisão.
+  const systemPrompt = `Você é o assistente financeiro do GestCEI — Centro de Educação Infantil Maria Salete LTDA em Joinville/SC.
+Conta bancária: SICOOB São Miguel.
+Sua função: extrair TODOS os lançamentos financeiros do documento com máxima precisão.
 
 REGRAS ABSOLUTAS:
 1. Retorne APENAS JSON válido — zero texto antes ou depois.
-2. INCLUA todos os lançamentos do extrato bancário — inclusive pagamentos de fatura de cartão.
-   → No extrato bancário, o pagamento da fatura É uma saída real de caixa (dinheiro que saiu da conta).
-   → Inclua: DÉB.PGTO.BOLETO, DÉB.CONV.DEM.EMPRES MASTERCARD, COMP VISA ELECTRO, etc.
-   → Categorize pagamentos de fatura como "Cartão de Crédito".
-   → Categorize compras individuais (COMP VISA ELECTRO) pela natureza da compra (ex: Alimentacao).
-   → NÃO invente lançamentos — extraia apenas o que está explicitamente no documento.
-3. NUNCA invente lançamentos — só extraia o que está no documento.
-4. Use as regras aprendidas como memória permanente de categorização.
-5. ATENÇÃO ÀS DATAS: O extrato está no formato brasileiro DD/MM. Sempre converta para YYYY-MM-DD no JSON. Se o dia for maior que 12, não confunda com mês.`;
+2. INCLUA todos os lançamentos — inclusive pagamentos de fatura, débitos automáticos, RDC, etc.
+3. NUNCA invente lançamentos — extraia apenas o que está no documento.
+4. Datas: formato brasileiro DD/MM no extrato → converta para YYYY-MM-DD no JSON.
+5. D = débito = "saida" | C = crédito = "entrada".
+6. IGNORE linhas de saldo (SALDO DO DIA, SALDO ANTERIOR, SALDO BLOQ).`;
 
-  const prompt = `Hoje é ${hoje}. Analise o documento financeiro e extraia todos os lançamentos.
+  const catsTxt = CATEGORIAS_VALIDAS.join(' | ');
 
-══════════════════════════════════════════
-LEITURA DE EXTRATO SICOOB
-══════════════════════════════════════════
-Colunas: DATA | HISTÓRICO | VALOR
-• Datas: DD/MM (DIA/MÊS) — o ANO está no cabeçalho (campo PERÍODO)
-• D = débito = "saida" | C = crédito = "entrada"
-• IGNORAR: SALDO DO DIA, SALDO ANTERIOR, SALDO BLOQ, linhas com só CPF/CNPJ, linhas "DOC.:" e "FAV.:"
-• Cada lançamento tem sua própria data na coluna esquerda
-• Extraia a data de CADA lançamento individualmente — não use a data do cabeçalho para todos
-• ATENÇÃO: Se a sequência de datas pular de 28/02 para 01/03, o mês mudou para MARÇO. Não confunda 02/03 (2 de Março) com 03/02 (3 de Fevereiro).
+  const prompt = `Hoje é ${hoje}. Analise o extrato SICOOB e extraia todos os lançamentos.
 
-══════════════════════════════════════════
-MEMÓRIA DE CATEGORIAS (regras aprendidas)
-══════════════════════════════════════════
-Estas regras são baseadas no histórico real desta instituição — priorize-as:
-${regrasTxt}
+COLUNAS DO EXTRATO: DATA | HISTÓRICO | VALOR
+- Datas: DD/MM (converta para YYYY-MM-DD usando o ano do cabeçalho/período)
+- D = débito = "saida" | C = crédito = "entrada"
+- IGNORE: SALDO DO DIA, SALDO ANTERIOR, SALDO BLOQ
 
-══════════════════════════════════════════
-CATEGORIAS DISPONÍVEIS
-══════════════════════════════════════════
-${catsTxt}
+CATEGORIAS DISPONÍVEIS: ${catsTxt}
 
-══════════════════════════════════════════
-GUIA DE CATEGORIZAÇÃO PARA CEI
-══════════════════════════════════════════
-ALIMENTAÇÃO:
-  → Supermercado, atacado, açougue, mercearia, hortifruti, laticínios, grãos, frios
-  → KOMPRAO, ATACADAO, ANGELONI, BISTEK, COMPER, BIG, EXTRA, CARREFOUR, SAO BRAZ
+REGRA fornecedor_chave:
+- Extraia 2-4 palavras que identificam o estabelecimento/pessoa
+- Remova: datas, valores, números, CPF/CNPJ, cidade/estado
+- Ex: "PIX EMIT INES APARECIDA FOSS ROCHA CPF 123" → "INES APARECIDA FOSS ROCHA"
+- Ex: "DEB.CONV.SANEAMENTO 02/2026" → "SAMAE"
+- Deixe "" se não identificável
 
-LIMPEZA:
-  → Produtos de limpeza, higiene, descartáveis, sabão, desinfetante, detergente
-  → SUPERCLEAN, LIMPEZA, HIGIENE
-
-MATERIAL DE ESCRITORIO:
-  → Papel, caneta, toner, cartucho, papel A4, grampeador, pasta, arquivo
-  → KALUNGA, LEROY, PAPELARIA
-
-MATERIAL PEDAGOGICO:
-  → Brinquedo, livro didático, tinta guache, cola, EVA, massinha, lápis de cor
-  → PEDAGÓGICO, DIDÁTICO, ESCOLAR
-
-SALARIOS:
-  → Holerite, folha de pagamento, pagamento funcionário, adiantamento salário
-  → SALARIO, HOLERITE, FOLHA, ADIANTAMENTO
-
-ENCARGOS TRABALHISTAS:
-  → INSS, FGTS, PIS, contribuição previdenciária, DARF, GPS, SIMPLES NACIONAL
-  → INSS, FGTS, RECEITA FEDERAL, DARF
-
-DEMISSAO:
-  → Rescisão contratual, aviso prévio indenizado, multa FGTS 40%, férias indenizadas
-  → RESCISÃO, AVISO PRÉVIO, INDENIZAÇÃO, RESCISAO
-
-AGUA/ENERGIA:
-  → Conta de água, energia elétrica, CELESC, SAMAE, CASAN
-  → CELESC, SAMAE, CASAN, COPEL, SABESP
-
-TELEFONE/INTERNET:
-  → Internet, telefone fixo/celular, banda larga, chip, plano
-  → TIM, CLARO, VIVO, OI, NET, ALGAR, COPEL TELECOM, INTELBRAS
-
-NUTRICIONISTA:
-  → Honorários nutricionista, cardápio, consultoria nutricional
-  → NUTRICIONISTA, NUTRI, CARDÁPIO
-
-CONTABILIDADE:
-  → Contador, escritório contábil, honorários contábeis, DP, RH terceirizado
-  → CONTABILIDADE, CONTADOR, CONTABIL, ASSESSORIA CONTÁBIL
-
-MENSALIDADE / MATRICULA:
-  → Mensalidade de aluno, pagamento de matrícula
-  → MENSALIDADE, MATRÍCULA, ANUIDADE
-
-REPASSE/CONVENIO:
-  → Repasse prefeitura, convênio municipal/estadual, subsídio governamental
-  → PREFEITURA, PMJ, PMC, CONVÊNIO, REPASSE, FAS, FUNDACAO
-
-MANUTENCAO:
-  → Conserto, manutenção predial, pintura, reforma, dedetização, jardinagem
-  → MANUTENÇÃO, CONSERTO, REFORMA, PINTURA, DEDETIZ
-
-TRANSPORTE:
-  → Uber, 99, táxi, frete, combustível, passagem, ticket transporte
-  → UBER, 99POP, FRETE, PASSAGEM, GASOLINA
-
-SEGURO:
-  → Seguro predial, seguro de vida, plano de saúde funcionário
-  → SEGURO, BRADESCO SAÚDE, UNIMED, PORTO SEGURO
-
-OUTROS:
-  → Não se encaixa em nenhuma das categorias acima
-
-══════════════════════════════════════════
-REGRA: fornecedor_chave
-══════════════════════════════════════════
-• Extraia 2-4 palavras que identificam unicamente o fornecedor/empresa
-• Remova: datas, valores, números de documento, CPF/CNPJ, cidade/estado
-• Ex: "COMP VISA ELEKTRO MATERIAIS JOINVILLE 15/02" → "ELEKTRO MATERIAIS"
-• Ex: "PIX RECEBIDO MARIA OLIVEIRA SANTOS CPF 123" → "MARIA OLIVEIRA"
-• Ex: "DEB AUTOM CELESC 02/2026" → "CELESC"
-• Deixe "" se o fornecedor for uma pessoa física não identificável
-
-══════════════════════════════════════════
-CONFIANÇA DA CATEGORIZAÇÃO
-══════════════════════════════════════════
-• "alta": nome do fornecedor está nas regras aprendidas OU é inequívoco (CELESC→energia)
-• "media": nome sugere categoria mas há ambiguidade
-• "baixa": suposição — categoria mais provável mas incerta
-
-══════════════════════════════════════════
-FORMATO DE SAÍDA (JSON APENAS)
-══════════════════════════════════════════
+FORMATO JSON (responda APENAS com este JSON):
 {
   "lancamentos": [
     {
-      "descricao": "COMP VISA KOMPRAO JOINVILLE",
+      "descricao": "texto original do histórico",
       "valor": 384.50,
       "tipo": "saida",
       "data": "2026-03-02",
-      "categoria_sugerida": "Alimentacao",
-      "subcategoria_sugerida": "Compras supermercado",
+      "categoria_sugerida": "FORNECEDORES & SERVIÇOS",
       "confianca": "alta",
-      "fornecedor_chave": "KOMPRAO JOINVILLE"
+      "fornecedor_chave": "KOMPRAO"
     }
   ]
-}
-REPETINDO: O formato da data no JSON deve ser YYYY-MM-DD. Verifique se o dia e o mês não foram invertidos (Brasil usa DD/MM).`;
+}`;
 
   try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
+    // ── ETAPA 1: Extrair lançamentos via IA ─────────────────────────────
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 8000,
         system: systemPrompt,
-        messages: [{ role: "user", content: [fileContent, { type: "text", text: prompt }] }],
+        messages: [{ role: 'user', content: [fileContent, { type: 'text', text: prompt }] }],
       }),
     });
 
     const data = await resp.json();
     if (data.error) return res.status(500).json({ error: data.error.message });
 
-    const text = data.content?.map((c) => c.text || "").join("") || "";
-    const clean = text.replace(/```json|```/g, "").trim();
-    const s = clean.indexOf("{");
-    if (s === -1) return res.status(500).json({ error: "IA nao retornou formato valido" });
+    const text = (data.content || []).map(c => c.text || '').join('');
+    const clean = text.replace(/```json|```/g, '').trim();
+    const s = clean.indexOf('{');
+    if (s === -1) return res.status(500).json({ error: 'IA não retornou formato válido' });
 
-    // Tentar parse normal; se truncado, recuperar lancamentos completos
     let parsed;
-    const e = clean.lastIndexOf("}");
+    const e = clean.lastIndexOf('}');
     try {
       parsed = JSON.parse(clean.slice(s, e + 1));
     } catch (_) {
-      // JSON truncado: salvar tudo que foi extraido ate o ultimo objeto completo
-      const arrStart = clean.indexOf("[", s);
-      if (arrStart === -1) return res.status(500).json({ error: "IA nao retornou formato valido" });
+      // JSON truncado: recuperar lançamentos completos
+      const arrStart = clean.indexOf('[', s);
+      if (arrStart === -1) return res.status(500).json({ error: 'IA não retornou formato válido' });
       const chunk = clean.slice(arrStart);
-      const lastComplete = chunk.lastIndexOf("},");
-      const arrRecuperada = lastComplete > 0 ? chunk.slice(0, lastComplete + 1) + "]" : "[]";
+      const lastComplete = chunk.lastIndexOf('},');
+      const arrRecuperada = lastComplete > 0 ? chunk.slice(0, lastComplete + 1) + ']' : '[]';
       try {
-        const lancamentos = JSON.parse(arrRecuperada);
-        parsed = { lancamentos, _truncado: true };
+        parsed = { lancamentos: JSON.parse(arrRecuperada), _truncado: true };
       } catch (_2) {
-        return res.status(500).json({ error: "Resposta incompleta — tente um extrato menor ou em partes" });
+        return res.status(500).json({ error: 'Resposta incompleta — tente um extrato menor' });
       }
     }
 
-    // Pos-processamento: aplicar regras aprendidas nos lancamentos com baixa confianca
-    if (parsed.lancamentos && regras) {
-      parsed.lancamentos = parsed.lancamentos.map((l) => {
-        if (l.confianca !== "baixa") return l;
-        const chave = Object.keys(regras).find((k) =>
-          l.descricao.toUpperCase().includes(k.toUpperCase()) ||
-          (l.fornecedor_chave && l.fornecedor_chave.toUpperCase().includes(k.toUpperCase()))
-        );
-        if (chave) {
-          return { ...l, categoria_sugerida: regras[chave], confianca: "alta" };
-        }
-        return l;
-      });
+    if (!Array.isArray(parsed.lancamentos)) {
+      return res.status(500).json({ error: 'Formato inválido retornado pela IA' });
     }
 
-    return res.status(200).json(parsed);
+    // ── ETAPA 2: Categorização inteligente pós-extração ─────────────────
+    const lancamentosProcessados = await Promise.all(
+      parsed.lancamentos.map(async (l) => {
+        const descricaoOriginal = l.descricao || '';
+
+        // 2a. Motor de regras local (mais rápido, sem custo)
+        const resultRegra = categorizarTransacao({
+          descricao: descricaoOriginal,
+          tipo: l.tipo,
+          valor: l.valor,
+        });
+
+        // 2b. Se confiança alta (>= 0.75), usa direto
+        if (resultRegra.confianca >= 0.75) {
+          return {
+            ...l,
+            categoria_sugerida: resultRegra.categoria,
+            fornecedor_chave: l.fornecedor_chave || resultRegra.merchant || '',
+            confianca: resultRegra.confianca >= 0.9 ? 'alta' : 'media',
+            // campos de debug
+            _descricao_original: resultRegra.descricao_original,
+            _descricao_limpa: resultRegra.descricao_limpa,
+            _merchant_detectado: resultRegra.merchant,
+            _origem_categorizacao: resultRegra.origem,
+            _score_confianca: resultRegra.confianca,
+          };
+        }
+
+        // 2c. Consultar histórico no Supabase
+        if (SUPABASE_URL && SUPABASE_KEY) {
+          const descLimpa = normalizarDescricao(descricaoOriginal);
+          const hist = await consultarHistoricoMerchant(descLimpa, SUPABASE_URL, SUPABASE_KEY);
+          if (hist && hist.confianca >= 0.75) {
+            return {
+              ...l,
+              categoria_sugerida: hist.categoria,
+              fornecedor_chave: l.fornecedor_chave || hist.merchant || '',
+              confianca: 'alta',
+              _descricao_original: descricaoOriginal,
+              _descricao_limpa: descLimpa,
+              _merchant_detectado: hist.merchant,
+              _origem_categorizacao: hist.origem,
+              _score_confianca: hist.confianca,
+            };
+          }
+        }
+
+        // 2d. IA fallback (categorização separada, barata)
+        const iaResult = await categorizarComIA(descricaoOriginal, ANTHROPIC_KEY);
+        if (iaResult) {
+          return {
+            ...l,
+            categoria_sugerida: iaResult.categoria,
+            fornecedor_chave: l.fornecedor_chave || iaResult.merchant || '',
+            confianca: iaResult.confianca >= 0.8 ? 'alta' : 'media',
+            _descricao_original: descricaoOriginal,
+            _descricao_limpa: normalizarDescricao(descricaoOriginal),
+            _merchant_detectado: iaResult.merchant,
+            _origem_categorizacao: 'ia',
+            _score_confianca: iaResult.confianca,
+          };
+        }
+
+        // 2e. Usar resultado do motor de regras (mesmo com baixa confiança) + validar
+        const catFinal = validarCategoria(resultRegra.categoria || l.categoria_sugerida);
+        return {
+          ...l,
+          categoria_sugerida: catFinal,
+          confianca: 'baixa',
+          _descricao_original: descricaoOriginal,
+          _descricao_limpa: resultRegra.descricao_limpa || '',
+          _merchant_detectado: resultRegra.merchant || l.fornecedor_chave || '',
+          _origem_categorizacao: resultRegra.origem || 'fallback',
+          _score_confianca: resultRegra.confianca || 0.3,
+        };
+      })
+    );
+
+    // ── ETAPA 3: Validação final da whitelist ────────────────────────────
+    const lancamentosValidados = lancamentosProcessados.map(l => ({
+      ...l,
+      categoria_sugerida: validarCategoria(l.categoria_sugerida),
+    }));
+
+    return res.status(200).json({ ...parsed, lancamentos: lancamentosValidados });
+
   } catch (err) {
-    console.error("Erro:", err);
+    console.error('Erro processar-documento:', err);
     return res.status(500).json({ error: err.message });
   }
 }
