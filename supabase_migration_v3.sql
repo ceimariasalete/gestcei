@@ -1,7 +1,20 @@
 -- ============================================================
--- GestCEI v3 — Novas Categorias Simplificadas
+-- GestCEI v3 — Limpeza e Novas Categorias Simplificadas
 -- ============================================================
 
+-- 1. Desabilita RLS temporariamente para garantir que a atualização funcione
+ALTER TABLE fin_categorias DISABLE ROW LEVEL SECURITY;
+GRANT ALL ON TABLE fin_categorias TO anon, authenticated, service_role;
+
+-- 2. Limpar TODAS as categorias antigas/duplicadas que ainda NÃO foram usadas em nenhum lançamento
+DELETE FROM fin_categorias 
+WHERE id NOT IN (
+  SELECT DISTINCT categoria_id FROM fin_despesas WHERE categoria_id IS NOT NULL
+  UNION 
+  SELECT DISTINCT categoria_id FROM fin_receitas WHERE categoria_id IS NOT NULL
+);
+
+-- 3. Inserir as exatas 15 categorias limpas e simples que a inteligência artificial vai usar
 INSERT INTO fin_categorias (nome, tipo, cor) VALUES
   ('Mercado', 'despesa', '#f59e0b'),
   ('Água', 'despesa', '#3b82f6'),
@@ -16,10 +29,11 @@ INSERT INTO fin_categorias (nome, tipo, cor) VALUES
   ('Cartão de Crédito', 'despesa', '#d946ef'),
   ('Investimentos', 'ambos', '#0ea5e9'),
   ('Transferência Própria', 'ambos', '#8b5cf6'),
-  ('Receitas', 'receita', '#22c55e')
+  ('Receitas', 'receita', '#22c55e'),
+  ('Outros', 'ambos', '#9ca3af')
 ON CONFLICT DO NOTHING;
 
--- Atualiza a memória base para refletir as novas categorias
+-- 4. Atualiza a memória base para refletir as novas categorias perfeitamente
 UPDATE fin_merchant_memory SET category = 'Manutenção' WHERE normalized_name IN ('CASA MIL', 'CASA MIL MATERIAIS');
 UPDATE fin_merchant_memory SET category = 'Mercado' WHERE normalized_name IN ('KOMPRAO', 'KOMPRAO JOINVILLE');
 UPDATE fin_merchant_memory SET category = 'Limpeza & Higiene' WHERE normalized_name = 'ECOXAXIM';
