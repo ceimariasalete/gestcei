@@ -13,6 +13,7 @@ export async function processarDocumentoIA(file, categorias, regras) {
     body: JSON.stringify({
       fileBase64: base64,
       mimeType: file.type,
+      fileName: file.name,
       categorias,
       regras,
     }),

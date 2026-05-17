@@ -96,17 +96,43 @@ async function consultarHistoricoMerchant(descLimpa, supabaseUrl, supabaseKey) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Método não permitido' });
 
-  const { fileBase64, mimeType } = req.body;
-  if (!fileBase64 || !mimeType) return res.status(400).json({ error: 'Arquivo obrigatório' });
+  const { fileBase64, mimeType, fileName } = req.body;
+  if (!fileBase64) return res.status(400).json({ error: 'Arquivo obrigatório' });
 
   const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
   const SUPABASE_URL  = process.env.VITE_SUPABASE_URL;
   const SUPABASE_KEY  = process.env.VITE_SUPABASE_ANON_KEY;
 
-  const isPDF = mimeType === 'application/pdf';
-  const fileContent = isPDF
-    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 } }
-    : { type: 'image', source: { type: 'base64', media_type: mimeType, data: fileBase64 } };
+  // Detecção robusta de PDF (útil no Windows onde mimeType pode vir em branco ou incorreto)
+  const ext = fileName ? fileName.split('.').pop().toLowerCase() : '';
+  const isPDF = mimeType === 'application/pdf' || 
+                mimeType?.toLowerCase().includes('pdf') || 
+                ext === 'pdf';
+
+  let fileContent;
+  if (isPDF) {
+    fileContent = {
+      type: 'document',
+      source: { type: 'base64', media_type: 'application/pdf', data: fileBase64 }
+    };
+  } else {
+    // Normalizar tipo de imagem para os estritamente aceitos pela Claude API
+    let mediaType = mimeType || '';
+    if (ext === 'png' || mediaType.toLowerCase().includes('png')) {
+      mediaType = 'image/png';
+    } else if (ext === 'webp' || mediaType.toLowerCase().includes('webp')) {
+      mediaType = 'image/webp';
+    } else if (ext === 'gif' || mediaType.toLowerCase().includes('gif')) {
+      mediaType = 'image/gif';
+    } else {
+      mediaType = 'image/jpeg'; // Padrão seguro para jpg/jpeg e outros
+    }
+
+    fileContent = {
+      type: 'image',
+      source: { type: 'base64', media_type: mediaType, data: fileBase64 }
+    };
+  }
 
   const hoje = new Date().toISOString().split('T')[0];
 
