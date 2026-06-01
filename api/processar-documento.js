@@ -75,12 +75,12 @@ export default async function handler(req, res) {
           }
           return v || '';
         }) : [];
-        csvData += rowValues.join(';') + '\\n';
+        csvData += rowValues.join(';') + '\n';
       });
       
       fileContent = {
         type: 'text',
-        text: \`DADOS DA PLANILHA EXCEL:\\n\\n\${csvData.substring(0, 50000)}\`
+        text: `DADOS DA PLANILHA EXCEL:\n\n${csvData.substring(0, 50000)}`
       };
     } catch (e) {
       return res.status(500).json({ error: 'Erro ao processar arquivo Excel: ' + e.message });
@@ -166,7 +166,7 @@ FORMATO JSON (responda APENAS com este JSON):
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-haiku-4-5',
         max_tokens: 8000,
         system: systemPrompt,
         messages: [{ role: 'user', content: [fileContent, { type: 'text', text: prompt }] }],
